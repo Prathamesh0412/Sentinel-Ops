@@ -118,34 +118,22 @@ const generateMockWorkflows = () => [
   }
 ]
 
-export const useAppStore = create((set, get) => ({
-  user: {
-    name: 'Prathamesh',
-    role: 'Admin',
-    avatar: '/placeholder-user.jpg'
-  },
-  notifications: [],
-  isLoading: false,
-  
-  // Actions
-  addNotification: (notification) => set((state) => ({
-    notifications: [notification, ...state.notifications]
-  })),
-  clearNotifications: () => set({ notifications: [] }),
-  setLoading: (loading) => set({ isLoading: loading }),
-  
-  // Metrics - using more realistic data simulation
-  updateMetrics: () => {
-    // In a real app, this would fetch from backend
-    // Here we simulate live updates
-  }
-}))
+// API base URL
+const API_BASE_URL = 'http://localhost:8080/api'
 
-export const useActions = () => useStore((state) => state.actions)
-export const usePredictions = () => useStore((state) => state.predictions)
-export const useWorkflows = () => useStore((state) => state.workflows)
-export const useMetrics = () => useStore((state) => state.metrics)
-export const useIsProcessing = () => useStore((state) => state.isProcessing)
+// Transform API response to frontend format
+const transformWorkflow = (workflow) => ({
+  id: workflow.id,
+  name: workflow.name,
+  description: workflow.description,
+  is_active: workflow.active,
+  is_executing: false,
+  success_rate: workflow.successRate || 0,
+  execution_count: workflow.executionCount || workflow.execution_count || 0,
+  total_executions: workflow.executionCount || workflow.total_executions || workflow.execution_count || 0,
+  trigger_type: workflow.trigger_type || workflow.triggerType || null,
+  last_execution: workflow.lastRunAt || workflow.last_execution || null
+})
 
 // Main store combining domain logic
 export const useStore = create((set, get) => ({
@@ -179,11 +167,87 @@ export const useStore = create((set, get) => ({
     predictions: [prediction, ...state.predictions]
   })),
   
-  toggleWorkflow: (id) => set((state) => ({
-    workflows: state.workflows.map(w => 
-      w.id === id ? { ...w, is_active: !w.is_active } : w
-    )
-  })),
+  toggleWorkflow: async (id, isActive) => {
+    try {
+      set({ isProcessing: true })
+      const response = await fetch(`${API_BASE_URL}/workflows`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, isActive })
+      })
+      const updatedWorkflowData = await response.json()
+      const updatedWorkflow = transformWorkflow(updatedWorkflowData)
+      set((state) => ({
+        workflows: state.workflows.map(w => 
+          w.id === id ? updatedWorkflow : w
+        ),
+        isProcessing: false
+      }))
+    } catch (error) {
+      console.error('Error toggling workflow:', error)
+      set({ isProcessing: false })
+    }
+  },
+
+  createWorkflow: async (payload = {}) => {
+    try {
+      set({ isProcessing: true })
+      // Accept frontend keys: name, description, is_active
+      const body = {
+        name: payload.name || undefined,
+        description: payload.description || undefined,
+        is_active: typeof payload.is_active !== 'undefined' ? payload.is_active : undefined,
+      }
+      const response = await fetch(`${API_BASE_URL}/workflows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const newWorkflowData = await response.json()
+      const newWorkflow = transformWorkflow(newWorkflowData)
+      set((state) => ({
+        workflows: [newWorkflow, ...state.workflows],
+        isProcessing: false
+      }))
+      return newWorkflow
+    } catch (error) {
+      console.error('Error creating workflow:', error)
+      set({ isProcessing: false })
+      throw error
+    }
+  },
+
+  fetchWorkflows: async () => {
+    try {
+      set({ isProcessing: true })
+      const response = await fetch(`${API_BASE_URL}/workflows`)
+      const workflowsData = await response.json()
+      const workflows = workflowsData.map(transformWorkflow)
+      set({ workflows, isProcessing: false })
+      return workflows
+    } catch (error) {
+      console.error('Error fetching workflows:', error)
+      set({ isProcessing: false })
+      // Fall back to mock data on error
+      set({ workflows: generateMockWorkflows() })
+    }
+  },
+  
+  executeWorkflow: async (id) => {
+    try {
+      set({ isProcessing: true })
+      // Execute workflow endpoint (you may need to add this to backend)
+      const response = await fetch(`${API_BASE_URL}/workflows/${id}/execute`, {
+        method: 'POST'
+      })
+      const result = await response.json()
+      set({ isProcessing: false })
+      return result
+    } catch (error) {
+      console.error('Error executing workflow:', error)
+      set({ isProcessing: false })
+    }
+  },
   
   updateMetrics: () => {
     set({ isProcessing: true })
@@ -203,3 +267,11 @@ export const useStore = create((set, get) => ({
     }, 800)
   }
 }))
+
+// Selector hooks for easier access
+export const useActions = () => useStore((state) => state.actions)
+export const usePredictions = () => useStore((state) => state.predictions)
+export const useWorkflows = () => useStore((state) => state.workflows)
+export const useMetrics = () => useStore((state) => state.metrics)
+export const useIsProcessing = () => useStore((state) => state.isProcessing)
+export const useAppStore = () => useStore()

@@ -3,7 +3,7 @@ export default [
     ignores: ['node_modules/**', 'dist/**'],
   },
   {
-    files: ['**/*.js', '**/*.jsx'],
+    files: ['**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',

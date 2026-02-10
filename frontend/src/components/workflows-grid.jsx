@@ -45,8 +45,12 @@ export function WorkflowsGrid() {
   const [mounted, setMounted] = useState(false)
   const [expandedId, setExpandedId] = useState(null)
 
+  const { fetchWorkflows } = useAppStore()
+
   useEffect(() => {
     setMounted(true)
+    // load workflows from backend
+    fetchWorkflows().catch((e) => console.error('fetchWorkflows error', e))
   }, [])
 
   const handleToggleWorkflow = async (id, isActive) => {

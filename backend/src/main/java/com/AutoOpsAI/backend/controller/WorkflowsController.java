@@ -44,5 +44,29 @@ public class WorkflowsController {
     }
 
     public record ToggleWorkflowRequest(Long id, Boolean isActive) {}
+
+    @PostMapping
+    public ResponseEntity<Workflow> save(@RequestBody(required = false) Map<String, Object> req) {
+        Workflow workflow = new Workflow();
+        if (req != null) {
+            if (req.containsKey("name") && req.get("name") != null) {
+                workflow.setName(req.get("name").toString());
+            }
+            if (req.containsKey("description") && req.get("description") != null) {
+                workflow.setDescription(req.get("description").toString());
+            }
+            // accept either `is_active` (frontend) or `active` (camelCase)
+            if (req.containsKey("is_active") && req.get("is_active") != null) {
+                workflow.setActive(Boolean.parseBoolean(req.get("is_active").toString()));
+            } else if (req.containsKey("active") && req.get("active") != null) {
+                workflow.setActive(Boolean.parseBoolean(req.get("active").toString()));
+            }
+        }
+
+        if (workflow.getName() == null) workflow.setName("New Workflow");
+        if (workflow.getDescription() == null) workflow.setDescription("Untitled workflow");
+
+        return ResponseEntity.ok(repo.save(workflow));
+    }
 }
 
