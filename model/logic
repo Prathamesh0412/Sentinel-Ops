@@ -1,0 +1,105 @@
+"""Compatibility shim that delegates to logic.py.
+
+Spring Boot and local scripts should import or execute logic.py instead,
+but this file remains so existing references keep working.
+"""
+
+from logic import main  # type: ignore
+
+
+if __name__ == "__main__":
+    main()
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+
+# Product Data
+products = pd.DataFrame({
+    "product_id": [1, 2, 3],
+    "product_name": ["Soap", "Shampoo", "Toothpaste"],
+    "price": [30, 120, 60]
+})
+
+# Inventory Data
+inventory = pd.DataFrame({
+    "product_id": [1, 2, 3],
+    "current_stock": [120, 45, 80],
+    "reorder_level": [40, 20, 30]
+})
+
+# Sales Data (last 30 days)
+dates = pd.date_range(end=pd.Timestamp.today(), periods=30)
+
+sales_data = []
+np.random.seed(42)
+
+for product_id in [1, 2, 3]:
+    daily_sales = np.random.randint(2, 10, size=30)
+    for d, qty in zip(dates, daily_sales):
+        sales_data.append([product_id, d, qty])
+
+sales = pd.DataFrame(sales_data, columns=["product_id", "sale_date", "quantity_sold"])
+
+sales_stats = sales.groupby("product_id").agg(
+    total_sales=("quantity_sold", "sum"),
+    avg_daily_sales=("quantity_sold", "mean")
+).reset_index()
+
+print("\n📊 SALES STATS")
+print(sales_stats)
+
+inventory_ml = inventory.merge(sales_stats, on="product_id")
+
+inventory_ml["days_until_stock_out"] = (
+    inventory_ml["current_stock"] / inventory_ml["avg_daily_sales"]
+)
+
+def stock_warning(row):
+    if row["days_until_stock_out"] <= 7:
+        return "⚠ LOW STOCK"
+    else:
+        return "✅ SAFE"
+
+inventory_ml["stock_status"] = inventory_ml.apply(stock_warning, axis=1)
+
+print("\n🚨 STOCK STATUS")
+print(inventory_ml[["product_id", "current_stock", "days_until_stock_out", "stock_status"]])
+
+best_product = sales_stats.loc[sales_stats["total_sales"].idxmax()]
+
+print("\n🏆 BEST SELLING PRODUCT")
+print(best_product)
+
+trend_results = {}
+
+for pid in sales["product_id"].unique():
+    product_sales = sales[sales["product_id"] == pid]
+    
+    X = np.arange(len(product_sales)).reshape(-1, 1)
+    y = product_sales["quantity_sold"].values
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    trend = "Increasing 📈" if model.coef_[0] > 0 else "Decreasing 📉"
+    trend_results[pid] = trend
+
+print("\n📈 SALES TRENDS")
+for pid, trend in trend_results.items():
+    print(f"Product {pid}: {trend}")
+
+kmeans = KMeans(n_clusters=3, random_state=42)
+inventory_ml["sales_cluster"] = kmeans.fit_predict(
+    inventory_ml[["total_sales"]]
+)
+
+print("\n🔍 PRODUCT CLUSTERS (0 = Low, 2 = High Demand)")
+print(inventory_ml[["product_id", "total_sales", "sales_cluster"]])
+
+plt.bar(products["product_name"], sales_stats["total_sales"])
+plt.title("Total Sales per Product")
+plt.xlabel("Product")
+plt.ylabel("Units Sold")
+plt.show()

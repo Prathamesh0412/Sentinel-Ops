@@ -28,3 +28,31 @@ While most of the inheritance is fine, it also inherits unwanted elements like `
 To prevent this, the project POM contains empty overrides for these elements.
 If you manually switch to a different parent and actually want the inheritance, you need to remove those overrides.
 
+## Inventory intelligence model
+
+The AI inventory card is powered by the Python script under `model/logic.py`.
+
+### Install Python dependencies
+
+```bash
+cd model
+python -m venv .venv
+.venv\\Scripts\\activate  # use source .venv/bin/activate on macOS/Linux
+pip install -r requirements.txt
+```
+
+### Run the model manually
+
+```bash
+cd model
+python logic.py --output-format=text --plot
+```
+
+Pass your own payload via `--input-file=payload.json` where the JSON object contains `products`, `inventory`, and `sales` arrays.
+
+### Spring Boot endpoint
+
+`GET /api/inventory-insights` runs the model with its built-in defaults. `POST /api/inventory-insights` accepts the JSON payload and forwards it to the Python process, returning the model output.
+
+Configure the Python interpreter or script location through `ml.inventory.python-command` and `ml.inventory.script-path` in `application.properties`.
+
