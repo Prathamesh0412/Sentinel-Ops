@@ -18,7 +18,7 @@ const recentActions = [
     description: "Sarah Chen - 20% discount",
     status: "success",
     timestamp: "2 min ago",
-    impact: "$12,500 protected",
+    impact: "₹12,500 protected",
   },
   {
     id: 2,
@@ -34,7 +34,7 @@ const recentActions = [
     description: "TechCorp Inc. - Sales pipeline",
     status: "success",
     timestamp: "1 hour ago",
-    impact: "$45K opportunity",
+    impact: "₹45K opportunity",
   },
   {
     id: 4,
@@ -57,7 +57,7 @@ const recentActions = [
 const stats = [
   { label: "Success Rate", value: "96.5%", icon: CheckCircle2 },
   { label: "Avg Response Time", value: "2.3s", icon: Clock },
-  { label: "Total Impact", value: "$2.4M", icon: TrendingUp },
+  { label: "Total Impact", value: "₹2.4M", icon: TrendingUp },
 ]
 
 export function ActionHistoryPanel() {

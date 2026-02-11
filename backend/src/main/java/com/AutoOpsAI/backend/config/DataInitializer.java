@@ -1,17 +1,26 @@
 package com.AutoOpsAI.backend.config;
 
-import com.AutoOpsAI.backend.model.*;
-import com.AutoOpsAI.backend.repo.*;
+import java.time.OffsetDateTime;
+
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.time.OffsetDateTime;
+import com.AutoOpsAI.backend.model.Action;
+import com.AutoOpsAI.backend.model.DataSource;
+import com.AutoOpsAI.backend.model.Metric;
+import com.AutoOpsAI.backend.model.Prediction;
+import com.AutoOpsAI.backend.model.Workflow;
+import com.AutoOpsAI.backend.repo.ActionRepository;
+import com.AutoOpsAI.backend.repo.DataSourceRepository;
+import com.AutoOpsAI.backend.repo.MetricRepository;
+import com.AutoOpsAI.backend.repo.PredictionRepository;
+import com.AutoOpsAI.backend.repo.WorkflowRepository;
 
 @Configuration
 public class DataInitializer {
     @Bean
-    CommandLineRunner seedData(ActionRepository actions,
+    public CommandLineRunner x(ActionRepository actions,
                                WorkflowRepository workflows,
                                PredictionRepository predictions,
                                DataSourceRepository dataSources,
@@ -76,9 +85,15 @@ public class DataInitializer {
                 m.setTotalActions(Math.toIntExact(actions.count()));
                 m.setActiveWorkflows(workflows.findByIsActive(true).size());
                 m.setPredictionsGenerated(Math.toIntExact(predictions.count()));
-                m.setSystemHealth(99);
+                m.setSystemHealth(96);
                 m.setAccuracyRate(94);
                 m.setTimeSavedHours(12.5);
+                m.setPendingActions(Math.toIntExact(actions.countByStatus("pending")));
+                m.setExecutedActions(Math.toIntExact(actions.countByStatus("executed")));
+                m.setTotalCustomers(5);
+                m.setActiveProducts(15);
+                m.setTotalRevenue(41200.0);
+                m.setConfidenceScore(91);
                 metrics.save(m);
             }
         };

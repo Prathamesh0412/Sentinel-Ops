@@ -121,6 +121,61 @@ const generateMockWorkflows = () => [
 // API base URL
 const API_BASE_URL = 'http://localhost:8080/api'
 
+const toTitleCase = (value, fallback = '') => {
+  if (!value || typeof value !== 'string') return fallback
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+}
+
+const normalizePrediction = (prediction = {}) => {
+  const type = prediction.prediction_type || prediction.type || 'insight'
+  const createdAt = prediction.created_at || prediction.createdAt || new Date().toISOString()
+  const severity = prediction.severity || 'Medium'
+  const status = prediction.status || 'Active'
+
+  return {
+    id: (prediction.id ?? `pred_${Math.random().toString(36).slice(2)}`).toString(),
+    prediction_type: type,
+    type,
+    name: prediction.name || toTitleCase(type, 'AI Insight'),
+    description: prediction.description || prediction.summary || 'No description provided.',
+    severity: toTitleCase(severity, 'Medium'),
+    status: toTitleCase(status, 'Active'),
+    confidence: Math.round(prediction.confidence ?? 0),
+    createdAt,
+    created_at: createdAt,
+    impact: prediction.impact ?? prediction.business_impact ?? null,
+    recommendation: prediction.recommendation ?? prediction.insight ?? null,
+    source: prediction.source ?? 'api'
+  }
+}
+
+const normalizeAction = (action = {}) => {
+  const type = action.action_type || action.type || 'general'
+  const createdAt = action.created_at || action.createdAt || new Date().toISOString()
+  const status = (action.status || 'pending').toLowerCase()
+  const priority = action.priority || (status === 'pending' ? 'High' : 'Medium')
+  const expectedImpact = Number(action.expected_impact ?? action.expectedImpact ?? 0)
+
+  return {
+    id: (action.id ?? `action_${Math.random().toString(36).slice(2)}`).toString(),
+    title: action.title || `${toTitleCase(type)} Action`,
+    description: action.description || action.generated_content || 'AI recommended action',
+    action_type: type,
+    type,
+    status,
+    priority,
+    expected_impact: Number.isFinite(expectedImpact) ? expectedImpact : 0,
+    created_at: createdAt,
+    updated_at: action.updated_at || action.updatedAt || null,
+    generated_content: action.generated_content || action.generatedContent || '',
+    result: action.result || {},
+  }
+}
+
 // Transform API response to frontend format
 const transformWorkflow = (workflow) => ({
   id: workflow.id,
@@ -137,18 +192,23 @@ const transformWorkflow = (workflow) => ({
 
 // Main store combining domain logic
 export const useStore = create((set, get) => ({
-  actions: generateMockActions(),
-  predictions: generateMockPredictions(),
+  actions: generateMockActions().map(normalizeAction),
+  predictions: [],
   workflows: generateMockWorkflows(),
   metrics: {
-    totalActions: 1243,
-    activeWorkflows: 12,
-    predictionsGenerated: 856,
-    systemHealth: 98,
-    timeSaved: 145,
-    accuracyRate: 94,
-    productivityBoost: 32,
-    lastUpdated: new Date().toISOString()
+    totalActions: 0,
+    activeWorkflows: 0,
+    predictionsGenerated: 0,
+    systemHealth: 0,
+    timeSaved: 0,
+    accuracyRate: 0,
+    totalCustomers: 0,
+    activeProducts: 0,
+    totalRevenue: 0,
+    executedActions: 0,
+    pendingActions: 0,
+    confidenceScore: 0,
+    lastUpdated: null
   },
   isProcessing: false,
 
@@ -232,6 +292,67 @@ export const useStore = create((set, get) => ({
       set({ workflows: generateMockWorkflows() })
     }
   },
+
+  fetchActions: async (filters = {}) => {
+    try {
+      const url = new URL(`${API_BASE_URL}/actions`)
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) {
+          url.searchParams.set(key, value)
+        }
+      })
+
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error('Failed to fetch actions')
+      }
+
+      const data = await response.json()
+      const normalized = data.map((item) => normalizeAction(item))
+      set({ actions: normalized })
+      return normalized
+    } catch (error) {
+      console.error('Error fetching actions:', error)
+      set((state) =>
+        state.actions.length
+          ? {}
+          : { actions: generateMockActions().map((item) => normalizeAction(item)) }
+      )
+      throw error
+    }
+  },
+
+  fetchPredictions: async (filters = {}) => {
+    try {
+      const url = new URL(`${API_BASE_URL}/predictions`)
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) {
+          url.searchParams.set(key, value)
+        }
+      })
+
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error('Failed to fetch predictions')
+      }
+
+      const predictionsData = await response.json()
+      const normalized = predictionsData
+        .map((item) => normalizePrediction(item))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+
+      set({ predictions: normalized })
+      return normalized
+    } catch (error) {
+      console.error('Error fetching predictions:', error)
+      set((state) =>
+        state.predictions.length
+          ? {}
+          : { predictions: generateMockPredictions().map((item) => normalizePrediction(item)) }
+      )
+      throw error
+    }
+  },
   
   executeWorkflow: async (id) => {
     try {
@@ -249,22 +370,38 @@ export const useStore = create((set, get) => ({
     }
   },
   
-  updateMetrics: () => {
-    set({ isProcessing: true })
-    
-    // Simulate API latency
-    setTimeout(() => {
-      set((state) => ({
+  updateMetrics: async () => {
+    try {
+      set({ isProcessing: true })
+      const response = await fetch(`${API_BASE_URL}/metrics`)
+      if (!response.ok) {
+        throw new Error('Failed to fetch metrics')
+      }
+      const data = await response.json()
+      set({
         metrics: {
-          ...state.metrics,
-          totalActions: state.metrics.totalActions + Math.floor(Math.random() * 2),
-          predictionsGenerated: state.metrics.predictionsGenerated + Math.floor(Math.random() * 3),
-          timeSaved: state.metrics.timeSaved + (Math.random() * 0.1),
-          lastUpdated: new Date().toISOString()
+          totalActions: data.totalActions ?? 0,
+          activeWorkflows: data.activeWorkflows ?? 0,
+          predictionsGenerated: data.predictionsGenerated ?? 0,
+          systemHealth: data.systemHealth ?? 0,
+          timeSaved: data.timeSavedHours ?? data.timeSaved ?? 0,
+          accuracyRate: data.accuracyRate ?? 0,
+          totalCustomers: data.totalCustomers ?? 0,
+          activeProducts: data.activeProducts ?? 0,
+          totalRevenue: data.totalRevenue ?? 0,
+          executedActions: data.executedActions ?? 0,
+          pendingActions: data.pendingActions ?? 0,
+          confidenceScore: data.confidenceScore ?? 0,
+          lastUpdated: data.lastUpdated ?? new Date().toISOString()
         },
         isProcessing: false
-      }))
-    }, 800)
+      })
+      return data
+    } catch (error) {
+      console.error('Error fetching metrics:', error)
+      set({ isProcessing: false })
+      throw error
+    }
   }
 }))
 

@@ -23,9 +23,9 @@ const FALLBACK_ACTIONS = [
     type: "email_campaign",
     title: "Customer Retention Campaign",
     context: "Sarah Chen • Enterprise plan",
-    description: "High-value customer (LTV: $12,500) showing 40% engagement decline",
+    description: "High-value customer (LTV: ₹12,500) showing 40% engagement decline",
     aiConfidence: 94,
-    estimatedImpact: "$12,500 revenue protected",
+    estimatedImpact: "₹12,500 revenue protected",
     urgency: "high",
     generatedContent:
       "Hi Sarah,\n\nWe've noticed you haven't been as active lately and wanted to reach out personally. As one of our valued customers, we'd like to offer you an exclusive 20% discount on your annual plan renewal.\n\nYour success matters to us. Can we schedule a call to discuss how we can better serve your needs?\n\nBest regards,\nAutoOps Success Team",
@@ -38,10 +38,10 @@ const FALLBACK_ACTIONS = [
     context: "Widget Pro 3000 (SKU-2891)",
     description: "Stock predicted to run out in 4 days based on current sales velocity",
     aiConfidence: 87,
-    estimatedImpact: "Prevent $24,000 lost revenue",
+    estimatedImpact: "Prevent ₹24,000 lost revenue",
     urgency: "medium",
     generatedContent:
-      "Purchase Order Draft\n\nSupplier: TechSupply Inc.\nProduct: Widget Pro 3000\nQuantity: 500 units\nUnit Price: $45.00\nTotal: $22,500.00\nRequested delivery: 3-5 business days\nShipping address: Warehouse A, 123 Industrial Blvd",
+      "Purchase Order Draft\n\nSupplier: TechSupply Inc.\nProduct: Widget Pro 3000\nQuantity: 500 units\nUnit Price: ₹45.00\nTotal: ₹22,500.00\nRequested delivery: 3-5 business days\nShipping address: Warehouse A, 123 Industrial Blvd",
   },
   {
     id: "lead-1",
@@ -51,7 +51,7 @@ const FALLBACK_ACTIONS = [
     context: "TechCorp Inc. • Enterprise prospect",
     description: "92% conversion probability based on behavior analysis and company fit",
     aiConfidence: 91,
-    estimatedImpact: "$45,000 potential deal",
+    estimatedImpact: "₹45,000 potential deal",
     urgency: "high",
     generatedContent:
       "Lead Assignment\n\nCompany: TechCorp Inc.\nContact: Mike Johnson, VP of Operations\nScore: 92/100\nSignals:\n- Visited pricing page 5 times\n- Downloaded product comparison guide\n- Company size matches ICP\n\nAction: Schedule demo within 48 hours\nAssigned to: Jessica Wong (Senior AE)",
@@ -68,9 +68,9 @@ const formatImpact = (value) => {
   if (!value) return "Impact pending"
   const numericValue = Number(value)
   if (Number.isFinite(numericValue)) {
-    return new Intl.NumberFormat("en-US", {
+    return new Intl.NumberFormat("en-IN", {
       style: "currency",
-      currency: "USD",
+      currency: "INR",
       maximumFractionDigits: 0,
     }).format(numericValue)
   }

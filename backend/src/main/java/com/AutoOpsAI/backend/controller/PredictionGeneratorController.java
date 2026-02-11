@@ -1,14 +1,18 @@
 package com.AutoOpsAI.backend.controller;
 
-import com.AutoOpsAI.backend.model.Prediction;
-import com.AutoOpsAI.backend.repo.PredictionRepository;
-import com.AutoOpsAI.backend.service.LlmClientService;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.AutoOpsAI.backend.model.Prediction;
+import com.AutoOpsAI.backend.repo.PredictionRepository;
+import com.AutoOpsAI.backend.service.LlmClientService;
 
 @RestController
 @RequestMapping("/api/predictions/generate")

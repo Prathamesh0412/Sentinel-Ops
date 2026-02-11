@@ -11,8 +11,13 @@ C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOps
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\controller\PredictionGeneratorController.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\controller\PredictionsController.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\controller\WorkflowsController.java
+C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\AnalyzeUploadRequest.java
+C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\AnalyzeUploadResponse.java
+C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\FileAnalysisSummary.java
+C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\FileUploadResponse.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\InventoryInsightsRequest.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\InventoryInsightsResponse.java
+C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\dto\UploadedFileDescriptor.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\exception\InventoryInsightsException.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\model\Action.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\model\CustomerFeedback.java
@@ -30,3 +35,4 @@ C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOps
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\repo\WorkflowRepository.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\service\InventoryInsightsService.java
 C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\service\LlmClientService.java
+C:\Users\ATHARVA\Documents\GitHub\Sentinel-Ops\backend\src\main\java\com\AutoOpsAI\backend\service\UploadedDataAnalysisService.java

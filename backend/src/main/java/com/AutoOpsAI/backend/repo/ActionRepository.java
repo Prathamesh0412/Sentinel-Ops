@@ -9,5 +9,7 @@ import java.util.List;
 @Repository
 public interface ActionRepository extends JpaRepository<Action, Long> {
     List<Action> findByStatus(String status);
+
+    long countByStatus(String status);
 }
 

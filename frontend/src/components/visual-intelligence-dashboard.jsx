@@ -5,40 +5,41 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Activity, 
-  Cpu, 
-  Target, 
+import {
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  Cpu,
+  Target,
   Clock,
   Zap,
   AlertTriangle,
   CheckCircle2,
   BarChart3,
-  PieChart,
-  LineChart,
   Eye
 } from "lucide-react"
-import { useDataStore } from "@/lib/core/data-store"
-import { useAppStore } from "@/lib/store"
+import { useActions, useMetrics, usePredictions, useWorkflows, useAppStore } from "@/lib/store"
+import { useDataAnalysisStore } from "@/lib/data-analysis-store"
 
-// Chart components (simplified for demo - in production would use recharts/Chart.js)
 const MiniLineChart = ({ data, color = "#3b82f6" }) => {
+  if (!data.length) {
+    return <div className="h-16 rounded bg-muted" />
+  }
+
   const max = Math.max(...data)
   const min = Math.min(...data)
   const range = max - min || 1
-  
+
   return (
     <div className="h-16 flex items-end gap-1">
       {data.map((value, index) => (
         <div
-          key={index}
-          className="flex-1 bg-current opacity-60 rounded-t"
+          key={`line-${index}`}
+          className="flex-1 bg-current opacity-70 rounded-t"
           style={{
             height: `${((value - min) / range) * 100}%`,
-            color: color,
-            minHeight: '2px'
+            color,
+            minHeight: "2px"
           }}
         />
       ))}
@@ -47,18 +48,22 @@ const MiniLineChart = ({ data, color = "#3b82f6" }) => {
 }
 
 const MiniBarChart = ({ data, color = "#10b981" }) => {
-  const max = Math.max(...data)
-  
+  if (!data.length) {
+    return <div className="h-16 rounded bg-muted" />
+  }
+
+  const max = Math.max(...data, 1)
+
   return (
     <div className="h-16 flex items-end gap-1">
       {data.map((value, index) => (
         <div
-          key={index}
-          className="flex-1 bg-current opacity-80 rounded-t"
+          key={`bar-${index}`}
+          className="flex-1 bg-current opacity-85 rounded-t"
           style={{
             height: `${(value / max) * 100}%`,
-            color: color,
-            minHeight: '2px'
+            color,
+            minHeight: "2px"
           }}
         />
       ))}
@@ -67,154 +72,321 @@ const MiniBarChart = ({ data, color = "#10b981" }) => {
 }
 
 const GaugeChart = ({ value, max = 100, label }) => {
-  const percentage = (value / max) * 100
-  const rotation = (percentage * 180) / 100 - 90
-  
-  let color = "#10b981" // green
-  if (percentage < 30) color = "#ef4444" // red
-  else if (percentage < 60) color = "#f59e0b" // yellow
-  
+  const percentage = max ? (value / max) * 100 : 0
+  const normalized = Math.min(Math.max(percentage, 0), 100)
+
+  let color = "#10b981"
+  if (normalized < 30) color = "#ef4444"
+  else if (normalized < 60) color = "#f59e0b"
+
+  const arcLength = Math.PI * 45
+  const dash = (normalized / 100) * arcLength
+
   return (
-    <div className="relative w-32 h-16">
-      <div className="absolute inset-0 rounded-t-full border-8 border-gray-700"></div>
-      <div 
-        className="absolute inset-0 rounded-t-full border-8 border-transparent border-t-current border-l-current"
-        style={{
-          transform: `rotate(${rotation}deg)`,
-          transformOrigin: 'center bottom',
-          color: color,
-          transition: 'all 0.5s ease'
-        }}
-      ></div>
-      <div className="absolute bottom-0 left-0 right-0 text-center">
-        <div className="text-lg font-bold">{Math.round(percentage)}%</div>
+    <div className="flex w-full flex-col items-center gap-2">
+      <svg
+        viewBox="0 0 100 52"
+        className="w-full max-w-[260px] drop-shadow-sm"
+        role="img"
+        aria-label={`${Math.round(normalized)} percent ${label}`}
+      >
+        <path d="M5 47 A45 45 0 0 1 95 47" stroke="var(--muted-foreground)" strokeWidth="10" fill="none" opacity="0.2" />
+        <path
+          d="M5 47 A45 45 0 0 1 95 47"
+          stroke={color}
+          strokeWidth="10"
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${arcLength}`}
+        />
+      </svg>
+      <div className="text-center">
+        <div className="text-2xl font-semibold leading-none">{Math.round(normalized)}%</div>
         <div className="text-xs text-muted-foreground">{label}</div>
       </div>
     </div>
   )
 }
 
+const formatActionType = (value) => {
+  if (!value) return "General"
+  return value
+    .toString()
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ")
+}
+
+const buildTrendSeries = (total, length, variance = 0.25) => {
+  if (!length) return []
+  if (!total) return Array(length).fill(0)
+  const base = total / length
+  return Array.from({ length }, (_, idx) => {
+    const wave = Math.sin(idx / 2.5) * base * variance
+    return Math.max(0, base + wave)
+  })
+}
+
+const calcTrendPercent = (series) => {
+  if (series.length < 2) return 0
+  const first = series[0] || 1
+  const last = series[series.length - 1]
+  return Math.round(((last - first) / first) * 100)
+}
+
+const safeNumber = (value, fallback = 0) => {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+const formatCurrency = (value) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return "₹0"
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: numeric >= 100000 ? 0 : 1
+  }).format(numeric)
+}
+
 export function VisualIntelligenceDashboard() {
-  const { 
-    customers, 
-    products, 
-    orders, 
-    actions, 
-    insights, 
-    workflows,
-    execution_logs,
-    metrics 
-  } = useDataStore()
-  
-  const { predictions } = useAppStore()
-  
+  const actions = useActions()
+  const metrics = useMetrics()
+  const predictions = usePredictions()
+  const workflows = useWorkflows()
+  const { fetchActions, fetchPredictions, fetchWorkflows, updateMetrics } = useAppStore()
+  const { latestInsights, fetchBaselineInsights } = useDataAnalysisStore()
+
   const [mounted, setMounted] = useState(false)
   const [explanationMode, setExplanationMode] = useState(false)
-  const [timeRange, setTimeRange] = useState('30d')
+  const [timeRange, setTimeRange] = useState("30d")
 
   useEffect(() => {
+    let isMounted = true
     setMounted(true)
-  }, [])
 
-  // Computed metrics - all derived from real data
-  const computedMetrics = useMemo(() => {
-    const executedActions = actions.filter(a => a.status === 'executed')
-    const rejectedActions = actions.filter(a => a.status === 'rejected')
-    const pendingActions = actions.filter(a => a.status === 'pending')
-    
-    // Time saved calculation (based on action types and impact)
-    const timeSavedPerAction = {
-      'email_campaign': 2, // 2 hours saved
-      'inventory_order': 4, // 4 hours saved
-      'lead_assignment': 1.5 // 1.5 hours saved
+    const hydrate = async () => {
+      try {
+        await Promise.all([
+          updateMetrics(),
+          fetchActions(),
+          fetchPredictions(),
+          fetchWorkflows(),
+          fetchBaselineInsights()
+        ])
+      } catch (error) {
+        console.warn("[VisualIntelligenceDashboard] bootstrap error", error)
+      }
     }
-    
-    const totalTimeSaved = executedActions.reduce((total, action) => {
-      const timeSaved = timeSavedPerAction[action.action_type] ?? 1
-      return total + timeSaved
-    }, 0)
 
-    // System health calculation (based on confidence scores and success rates)
-    const avgConfidence = insights.reduce((sum, insight) => sum + insight.confidence, 0) / (insights.length || 1)
-    const actionSuccessRate = executedActions.length / (actions.length || 1) * 100
-    const workflowSuccessRate = workflows.filter(w => w.is_active).length / (workflows.length || 1) * 100
-    
-    const systemHealth = (avgConfidence * 0.4 + actionSuccessRate * 0.3 + workflowSuccessRate * 0.3)
+    hydrate()
 
-    // Revenue impact
-    const totalRevenueImpact = executedActions.reduce((total, action) => {
-      return total + (action.expected_impact || 0)
-    }, 0)
+    const interval = setInterval(() => {
+      if (!isMounted) return
+      updateMetrics().catch(() => {})
+      fetchPredictions().catch(() => {})
+      fetchActions().catch(() => {})
+    }, 15000)
 
-    // Churn risk trends
-    const highRiskCustomers = customers.filter(c => c.churn_risk > 60).length
-    const churnRate = (highRiskCustomers / customers.length) * 100
+    return () => {
+      isMounted = false
+      clearInterval(interval)
+    }
+  }, [fetchActions, fetchPredictions, fetchWorkflows, updateMetrics, fetchBaselineInsights])
 
-    // Inventory alerts
-    const lowStockProducts = products.filter(p => p.stock_quantity < p.reorder_threshold).length
-    const inventoryHealth = ((products.length - lowStockProducts) / products.length) * 100
+  const computedMetrics = useMemo(() => {
+    const executedActions = actions.filter((action) => action.status === "executed" || action.status === "completed").length || metrics.executedActions || 0
+    const pendingActions = actions.filter((action) => action.status === "pending").length || metrics.pendingActions || 0
+    const rejectedActions = actions.filter((action) => ["failed", "rejected", "rolled_back"].includes(action.status)).length
+
+    const totalActions = actions.length || metrics.totalActions || executedActions + pendingActions
+    const totalTimeSaved = safeNumber(metrics.timeSaved, executedActions * 1.2)
+    const systemHealth = safeNumber(metrics.systemHealth || metrics.confidenceScore, 0)
+    const totalRevenueImpact = safeNumber(metrics.totalRevenue, 0)
+
+    const churnSignals = predictions.filter((prediction) => (prediction.prediction_type || prediction.type || "").includes("churn")).length
+    const churnRate = metrics.totalCustomers ? (churnSignals / metrics.totalCustomers) * 100 : 0
+
+    const inventorySignals = predictions.filter((prediction) => (prediction.prediction_type || prediction.type || "").includes("inventory"))
+    const highInventoryAlerts = inventorySignals.filter((prediction) => (prediction.severity || "").toLowerCase() === "high").length
+    const inventoryHealth = inventorySignals.length
+      ? Math.max(0, 100 - (highInventoryAlerts / inventorySignals.length) * 100)
+      : 100
+
+    const avgConfidence = predictions.length
+      ? predictions.reduce((sum, prediction) => sum + safeNumber(prediction.confidence, systemHealth), 0) / predictions.length
+      : systemHealth
+
+    const activeWorkflows = workflows.filter((workflow) => workflow.is_active).length
+    const workflowSuccessRate = workflows.length ? (activeWorkflows / workflows.length) * 100 : 0
+    const actionSuccessRate = totalActions ? (executedActions / totalActions) * 100 : 0
 
     return {
+      executedActions,
+      pendingActions,
+      rejectedActions,
       totalTimeSaved,
       systemHealth,
       totalRevenueImpact,
       churnRate,
       inventoryHealth,
-      executedActions: executedActions.length,
-      pendingActions: pendingActions.length,
-      rejectedActions: rejectedActions.length,
       avgConfidence,
-      actionSuccessRate
+      actionSuccessRate,
+      workflowSuccessRate
     }
-  }, [actions, insights, workflows, customers, products])
+  }, [actions, metrics, predictions, workflows])
 
-  // Generate trend data based on historical actions
+  const salesStats = useMemo(
+    () => (Array.isArray(latestInsights?.sales_stats) ? latestInsights.sales_stats : []),
+    [latestInsights]
+  )
+  const stockStatus = useMemo(
+    () => (Array.isArray(latestInsights?.stock_status) ? latestInsights.stock_status : []),
+    [latestInsights]
+  )
+  const priceRecommendations = useMemo(
+    () => (Array.isArray(latestInsights?.price_recommendations) ? latestInsights.price_recommendations : []),
+    [latestInsights]
+  )
+
+  const salesSeries = useMemo(
+    () => salesStats.map((stat) => safeNumber(stat.total_sales, 0)).filter((value) => value > 0).slice(0, 12),
+    [salesStats]
+  )
+  const velocitySeries = useMemo(
+    () => salesStats.map((stat) => safeNumber(stat.avg_daily_sales, 0)).filter((value) => value > 0).slice(0, 12),
+    [salesStats]
+  )
+  const runwaySeries = useMemo(
+    () => stockStatus.map((entry) => safeNumber(entry.days_until_stock_out, 0)).filter((value) => value > 0).slice(0, 12),
+    [stockStatus]
+  )
+  const priceDeltaSeries = useMemo(
+    () => priceRecommendations
+      .map((rec) => Math.abs(safeNumber(rec.recommended_price, 0) - safeNumber(rec.current_price, 0)))
+      .filter((value) => value > 0)
+      .slice(0, 12),
+    [priceRecommendations]
+  )
+
+  const salesTotals = useMemo(
+    () => salesStats.reduce((sum, stat) => sum + safeNumber(stat.total_sales, 0), 0),
+    [salesStats]
+  )
+  const avgDailyVelocity = useMemo(() => {
+    if (!salesStats.length) return 0
+    return salesStats.reduce((sum, stat) => sum + safeNumber(stat.avg_daily_sales, 0), 0) / salesStats.length
+  }, [salesStats])
+  const inventoryHealthScore = useMemo(() => {
+    if (!stockStatus.length) return 0
+    const healthy = stockStatus.filter((entry) => (entry.stock_status || "").toUpperCase() === "HEALTHY").length
+    return Math.round((healthy / stockStatus.length) * 100)
+  }, [stockStatus])
+  const revenueImpactEstimate = useMemo(() => {
+    if (!priceRecommendations.length) return 0
+    const statsMap = new Map(salesStats.map((stat) => [stat.product_id, safeNumber(stat.total_sales, 0)]))
+    return priceRecommendations.reduce((sum, rec) => {
+      const delta = safeNumber(rec.recommended_price, 0) - safeNumber(rec.current_price, 0)
+      const volume = statsMap.get(rec.product_id) || 1
+      return sum + delta * volume
+    }, 0)
+  }, [priceRecommendations, salesStats])
+
+  const hasUploadInsights = salesSeries.length > 0 || runwaySeries.length > 0 || priceDeltaSeries.length > 0
+
+  const trendLength = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90
+
   const actionTrendData = useMemo(() => {
-    const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90
-    const data = []
-    
-    for (let i = 0; i < days; i++) {
-      // Simulate action execution over time
-      const baseActions = 5
-      const variation = Math.sin(i / 3) * 2
-      const randomNoise = (Math.random() - 0.5) * 2
-      data.push(Math.max(0, baseActions + variation + randomNoise))
-    }
-    
-    return data
-  }, [timeRange])
+    if (hasUploadInsights && salesSeries.length) return salesSeries
+    return buildTrendSeries(Math.max(computedMetrics.executedActions, 0.1), trendLength, 0.35)
+  }, [computedMetrics.executedActions, hasUploadInsights, salesSeries, trendLength])
 
-  const confidenceTrendData = useMemo(() => {
-    const data = []
-    let currentConfidence = 75
-    
-    for (let i = 0; i < 30; i++) {
-      // Confidence changes based on action outcomes
-      const actionImpact = Math.random() > 0.7 ? 2 : -1
-      currentConfidence = Math.max(0, Math.min(100, currentConfidence + actionImpact))
-      data.push(currentConfidence)
-    }
-    
-    return data
-  }, [])
+  const timeSavedTrendData = useMemo(() => {
+    if (hasUploadInsights && velocitySeries.length) return velocitySeries
+    return buildTrendSeries(Math.max(computedMetrics.totalTimeSaved, 0.1), trendLength, 0.2)
+  }, [computedMetrics.totalTimeSaved, hasUploadInsights, velocitySeries, trendLength])
 
   const revenueDistribution = useMemo(() => {
-    const categories = ['Electronics', 'Clothing', 'Home', 'Sports', 'Books']
-    return categories.map(() => Math.random() * 10000 + 5000)
-  }, [])
+    if (hasUploadInsights && priceDeltaSeries.length) return priceDeltaSeries
+    const total = Math.max(computedMetrics.totalRevenueImpact, 0)
+    const weights = [0.28, 0.22, 0.18, 0.17, 0.15]
+    return total ? weights.map((weight) => total * weight) : Array(weights.length).fill(0)
+  }, [computedMetrics.totalRevenueImpact, hasUploadInsights, priceDeltaSeries])
+
+  const confidenceTrendData = useMemo(() => {
+    if (!predictions.length) {
+      return Array.from({ length: 12 }, () => Math.round(computedMetrics.avgConfidence))
+    }
+    const sorted = [...predictions].sort(
+      (a, b) => new Date(a.createdAt ?? a.created_at ?? 0) - new Date(b.createdAt ?? b.created_at ?? 0)
+    )
+    const values = sorted.map((prediction) => safeNumber(prediction.confidence, computedMetrics.avgConfidence))
+    while (values.length < 12) {
+      values.push(values[values.length - 1] ?? computedMetrics.avgConfidence)
+    }
+    return values.slice(-30)
+  }, [predictions, computedMetrics.avgConfidence])
+
+  const inventoryConfidenceData = useMemo(() => {
+    if (hasUploadInsights && runwaySeries.length) return runwaySeries
+    return confidenceTrendData.map((value, index) => Math.max(0, value + (index % 3 === 0 ? 4 : -3)))
+  }, [confidenceTrendData, hasUploadInsights, runwaySeries])
+
+  const leadConfidenceData = useMemo(() => {
+    if (hasUploadInsights && priceDeltaSeries.length) return priceDeltaSeries
+    return confidenceTrendData.map((value, index) => Math.max(0, value + (index % 4 === 0 ? 5 : -2)))
+  }, [confidenceTrendData, hasUploadInsights, priceDeltaSeries])
+
+  const actionTypeDistribution = useMemo(() => {
+    if (!actions.length) return []
+    const counts = actions.reduce((acc, action) => {
+      const key = formatActionType(action.action_type || action.type)
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {})
+    const palette = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6"]
+    return Object.entries(counts).map(([type, count], index) => ({
+      type,
+      count,
+      color: palette[index % palette.length]
+    }))
+  }, [actions])
+
+  const executionTimeline = useMemo(() => {
+    if (!actions.length) return []
+    const buckets = {
+      current: { label: "This Week", executed: 0, rejected: 0 },
+      previous: { label: "Last Week", executed: 0, rejected: 0 },
+      earlier: { label: "2+ Weeks Ago", executed: 0, rejected: 0 }
+    }
+
+    const now = new Date()
+    actions.forEach((action) => {
+      const createdAt = new Date(action.created_at || action.createdAt || now)
+      const diffWeeks = Math.floor((now - createdAt) / (7 * 24 * 60 * 60 * 1000))
+      const bucketKey = diffWeeks <= 0 ? "current" : diffWeeks === 1 ? "previous" : "earlier"
+      if (action.status === "executed" || action.status === "completed") {
+        buckets[bucketKey].executed += 1
+      } else if (["failed", "rejected", "rolled_back"].includes(action.status)) {
+        buckets[bucketKey].rejected += 1
+      }
+    })
+
+    return Object.values(buckets)
+  }, [actions])
 
   if (!mounted) {
     return (
       <div className="space-y-6">
         <div className="h-8 w-64 skeleton rounded" />
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map(i => (
-            <Card key={i}>
-              <CardContent className="p-6">
-                <div className="space-y-3">
-                  <div className="h-4 w-32 skeleton rounded" />
-                  <div className="h-8 w-20 skeleton rounded" />
-                </div>
+          {[1, 2, 3, 4].map((index) => (
+            <Card key={`skeleton-${index}`}>
+              <CardContent className="p-6 space-y-3">
+                <div className="h-4 w-24 skeleton rounded" />
+                <div className="h-8 w-20 skeleton rounded" />
               </CardContent>
             </Card>
           ))}
@@ -223,18 +395,25 @@ export function VisualIntelligenceDashboard() {
     )
   }
 
+  const actionTrendPercent = calcTrendPercent(actionTrendData)
+  const timeSavedTrendPercent = calcTrendPercent(timeSavedTrendData)
+  const inventoryConfidenceAvg = inventoryConfidenceData.length
+    ? Math.round(inventoryConfidenceData.reduce((sum, value) => sum + value, 0) / inventoryConfidenceData.length)
+    : Math.round(computedMetrics.avgConfidence)
+  const leadConfidenceAvg = leadConfidenceData.length
+    ? Math.round(leadConfidenceData.reduce((sum, value) => sum + value, 0) / leadConfidenceData.length)
+    : Math.round(computedMetrics.avgConfidence)
+  const systemHealthValue = hasUploadInsights ? inventoryHealthScore : computedMetrics.systemHealth
+
   return (
     <div className="space-y-6">
-      {/* Header with Explanation Mode Toggle */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold flex items-center gap-2">
             <Cpu className="size-6 text-primary" />
             Visual Intelligence Dashboard
           </h2>
-          <p className="text-muted-foreground">
-            Real-time AI insights and business impact visualization
-          </p>
+          <p className="text-muted-foreground">Real-time AI insights and business impact visualization</p>
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
@@ -242,13 +421,13 @@ export function VisualIntelligenceDashboard() {
             <Button
               variant={explanationMode ? "default" : "outline"}
               size="sm"
-              onClick={() => setExplanationMode(!explanationMode)}
+              onClick={() => setExplanationMode((state) => !state)}
             >
               {explanationMode ? "Explanation Mode ON" : "Explanation Mode OFF"}
             </Button>
           </div>
           <div className="flex gap-1">
-            {['7d', '30d', '90d'].map(range => (
+            {["7d", "30d", "90d"].map((range) => (
               <Button
                 key={range}
                 variant={timeRange === range ? "default" : "ghost"}
@@ -262,101 +441,101 @@ export function VisualIntelligenceDashboard() {
         </div>
       </div>
 
-      {/* Business Health Overview */}
       <Card className={explanationMode ? "ring-2 ring-primary/20" : ""}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Activity className="size-5 text-primary" />
             Business Health Overview
           </CardTitle>
-          <CardDescription>
-            System-wide metrics derived from AI actions and their real business impact
-          </CardDescription>
+          <CardDescription>System-wide metrics derived from AI actions and their business impact</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-            {/* Actions Executed Trend */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Actions Executed</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Total Sales" : "Actions Executed"}</span>
                 <Badge variant="outline" className="text-xs">
-                  {computedMetrics.executedActions} total
+                  {hasUploadInsights ? `${Math.round(salesTotals)} units` : `${computedMetrics.executedActions} total`}
                 </Badge>
               </div>
               <MiniLineChart data={actionTrendData} color="#3b82f6" />
               <div className="text-xs text-muted-foreground">
-                {timeRange} trend • +{Math.round(Math.random() * 20 + 5)}% vs last period
+                {hasUploadInsights
+                  ? `Top products • ${actionTrendPercent >= 0 ? "+" : ""}${actionTrendPercent}% spread`
+                  : `${timeRange} trend • ${actionTrendPercent >= 0 ? "+" : ""}${actionTrendPercent}% vs last period`}
               </div>
             </div>
 
-            {/* Time Saved Accumulation */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Time Saved</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Avg Daily Velocity" : "Time Saved"}</span>
                 <Badge variant="outline" className="text-xs">
-                  {Math.round(computedMetrics.totalTimeSaved)}h total
+                  {hasUploadInsights ? `${avgDailyVelocity.toFixed(1)} units/day` : `${Math.round(computedMetrics.totalTimeSaved)}h total`}
                 </Badge>
               </div>
-              <MiniBarChart data={actionTrendData.map(v => v * 2)} color="#10b981" />
+              <MiniBarChart data={timeSavedTrendData} color="#10b981" />
               <div className="text-xs text-muted-foreground">
-                {Math.round(computedMetrics.totalTimeSaved / 8)} days saved
+                {hasUploadInsights
+                  ? `${timeSavedTrendPercent >= 0 ? "+" : ""}${timeSavedTrendPercent}% velocity swing`
+                  : `${timeSavedTrendPercent >= 0 ? "+" : ""}${timeSavedTrendPercent}% change • ${Math.max(0, Math.round(computedMetrics.totalTimeSaved / 24))} days saved`}
               </div>
             </div>
 
-            {/* System Health Gauge */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">System Health</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Stock Health" : "System Health"}</span>
                 <Badge variant="outline" className="text-xs">
-                  {Math.round(computedMetrics.systemHealth)}%
+                  {Math.round(systemHealthValue)}%
                 </Badge>
               </div>
-              <div className="flex justify-center">
-                <GaugeChart value={computedMetrics.systemHealth} label="Health" />
-              </div>
+              <GaugeChart value={systemHealthValue} label={hasUploadInsights ? "Stock" : "Health"} />
             </div>
 
-            {/* Revenue Impact */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Revenue Impact</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Price Impact" : "Revenue Impact"}</span>
                 <Badge variant="outline" className="text-xs">
-                  ₹{Math.round(computedMetrics.totalRevenueImpact).toLocaleString()}
+                  {hasUploadInsights ? formatCurrency(revenueImpactEstimate) : `₹${Math.round(computedMetrics.totalRevenueImpact).toLocaleString()}`}
                 </Badge>
               </div>
               <MiniBarChart data={revenueDistribution} color="#8b5cf6" />
               <div className="text-xs text-muted-foreground">
-                From {computedMetrics.executedActions} actions
+                {hasUploadInsights ? "From ML price recommendations" : `From ${computedMetrics.executedActions} executed actions`}
               </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* AI Confidence Trends */}
       <Card className={explanationMode ? "ring-2 ring-primary/20" : ""}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Cpu className="size-5 text-amber-500" />
-            AI Prediction Confidence Trends
+            {hasUploadInsights ? "ML Insight Signals" : "AI Prediction Confidence Trends"}
           </CardTitle>
           <CardDescription>
-            Confidence scores evolve based on prediction accuracy and action outcomes
+            {hasUploadInsights
+              ? "Signals derived from uploaded data and model-generated insights"
+              : "Confidence scores evolve based on prediction accuracy and outcomes"}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-6 md:grid-cols-3">
-            {/* Churn Prediction Confidence */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Churn Prediction</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Sales Momentum" : "Churn Prediction"}</span>
                 <Badge variant="outline" className="text-xs">
-                  {Math.round(computedMetrics.avgConfidence)}% avg
+                  {hasUploadInsights ? `${Math.round(avgDailyVelocity)} avg` : `${Math.round(computedMetrics.avgConfidence)}% avg`}
                 </Badge>
               </div>
-              <MiniLineChart data={confidenceTrendData} color="#ef4444" />
+              <MiniLineChart data={hasUploadInsights ? actionTrendData : confidenceTrendData} color="#ef4444" />
               <div className="text-xs text-muted-foreground">
-                {computedMetrics.churnRate > 30 ? (
+                {hasUploadInsights ? (
+                  <span className="text-green-500 flex items-center gap-1">
+                    <TrendingUp className="size-3" />
+                    Demand signals from uploaded sales
+                  </span>
+                ) : computedMetrics.churnRate > 30 ? (
                   <span className="text-red-500 flex items-center gap-1">
                     <TrendingDown className="size-3" />
                     High churn risk detected
@@ -370,17 +549,21 @@ export function VisualIntelligenceDashboard() {
               </div>
             </div>
 
-            {/* Inventory Forecast Confidence */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Inventory Forecast</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Stock Runway" : "Inventory Forecast"}</span>
                 <Badge variant="outline" className="text-xs">
-                  {Math.round(computedMetrics.avgConfidence + 5)}% avg
+                  {hasUploadInsights ? `${Math.round(inventoryConfidenceAvg)} days` : `${inventoryConfidenceAvg}% avg`}
                 </Badge>
               </div>
-              <MiniLineChart data={confidenceTrendData.map(v => v + Math.random() * 10 - 5)} color="#f59e0b" />
+              <MiniLineChart data={inventoryConfidenceData} color="#f59e0b" />
               <div className="text-xs text-muted-foreground">
-                {computedMetrics.inventoryHealth < 50 ? (
+                {hasUploadInsights ? (
+                  <span className="text-amber-500 flex items-center gap-1">
+                    <AlertTriangle className="size-3" />
+                    Forecast from stock days until out
+                  </span>
+                ) : computedMetrics.inventoryHealth < 60 ? (
                   <span className="text-amber-500 flex items-center gap-1">
                     <AlertTriangle className="size-3" />
                     Low stock alerts active
@@ -394,120 +577,114 @@ export function VisualIntelligenceDashboard() {
               </div>
             </div>
 
-            {/* Lead Scoring Confidence */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Lead Scoring</span>
+                <span className="text-sm font-medium">{hasUploadInsights ? "Price Optimization" : "Lead Scoring"}</span>
                 <Badge variant="outline" className="text-xs">
-                  {Math.round(computedMetrics.avgConfidence - 3)}% avg
+                  {hasUploadInsights ? `${leadConfidenceAvg.toFixed(1)} avg` : `${leadConfidenceAvg}% avg`}
                 </Badge>
               </div>
-              <MiniLineChart data={confidenceTrendData.map(v => v + Math.random() * 8 - 4)} color="#10b981" />
+              <MiniLineChart data={leadConfidenceData} color="#10b981" />
               <div className="text-xs text-muted-foreground">
-                <span className="text-blue-500 flex items-center gap-1">
-                  <Target className="size-3" />
-                  Lead quality improving
-                </span>
+                {hasUploadInsights ? (
+                  <span className="text-blue-500 flex items-center gap-1">
+                    <Target className="size-3" />
+                    Price deltas from model recommendations
+                  </span>
+                ) : (
+                  <span className="text-blue-500 flex items-center gap-1">
+                    <Target className="size-3" />
+                    Lead quality improving
+                  </span>
+                )}
               </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Action Execution Impact */}
       <Card className={explanationMode ? "ring-2 ring-primary/20" : ""}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Zap className="size-5 text-purple-500" />
             Action Execution Impact
           </CardTitle>
-          <CardDescription>
-            Before vs After comparison showing real business impact of AI actions
-          </CardDescription>
+          <CardDescription>Comparison of action mix and throughput over time</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-6 md:grid-cols-2">
-            {/* Action Types Distribution */}
             <div className="space-y-3">
               <h4 className="text-sm font-medium">Action Types Distribution</h4>
-              <div className="space-y-2">
-                {[
-                  { type: 'Email Campaigns', count: 45, color: '#3b82f6' },
-                  { type: 'Inventory Orders', count: 32, color: '#10b981' },
-                  { type: 'Lead Assignments', count: 28, color: '#f59e0b' }
-                ].map(({ type, count, color }) => (
-                  <div key={type} className="flex items-center gap-3">
-                    <div className="w-24 text-sm">{type}</div>
-                    <div className="flex-1">
-                      <Progress 
-                        value={(count / 105) * 100} 
-                        className="h-2"
-                        style={{ '--progress-background': color }}
-                      />
+              {actionTypeDistribution.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No actions recorded from the backend yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {actionTypeDistribution.map(({ type, count, color }) => (
+                    <div key={type} className="flex items-center gap-3">
+                      <div className="w-28 text-sm">{type}</div>
+                      <div className="flex-1">
+                        <Progress value={(count / Math.max(actionTypeDistribution[0].count, 1)) * 100} className="h-2" style={{ "--progress-background": color }} />
+                      </div>
+                      <div className="w-10 text-right text-sm">{count}</div>
                     </div>
-                    <div className="w-8 text-sm text-right">{count}</div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Execution Timeline */}
             <div className="space-y-3">
               <h4 className="text-sm font-medium">Execution Timeline</h4>
-              <div className="space-y-2">
-                {[
-                  { time: 'This Week', executed: 12, rejected: 2 },
-                  { time: 'Last Week', executed: 8, rejected: 3 },
-                  { time: '2 Weeks Ago', executed: 15, rejected: 1 }
-                ].map(({ time, executed, rejected }) => (
-                  <div key={time} className="flex items-center gap-3">
-                    <div className="w-24 text-sm">{time}</div>
-                    <div className="flex-1 flex gap-1">
-                      <div 
-                        className="bg-green-500 rounded-sm" 
-                        style={{ width: `${(executed / 20) * 100}%`, height: '8px' }}
-                      />
-                      <div 
-                        className="bg-red-500 rounded-sm" 
-                        style={{ width: `${(rejected / 20) * 100}%`, height: '8px' }}
-                      />
-                    </div>
-                    <div className="w-16 text-xs text-right">
-                      <span className="text-green-500">{executed}</span>
-                      {' / '}
-                      <span className="text-red-500">{rejected}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {executionTimeline.length === 0 ? (
+                <p className="text-xs text-muted-foreground">Waiting for execution data...</p>
+              ) : (
+                <div className="space-y-2">
+                  {executionTimeline.map(({ label, executed, rejected }) => {
+                    const total = Math.max(executed + rejected, 1)
+                    return (
+                      <div key={label} className="flex items-center gap-3">
+                        <div className="w-28 text-sm">{label}</div>
+                        <div className="flex-1 flex gap-1 items-center">
+                          <div className="bg-green-500 rounded-sm" style={{ width: `${(executed / total) * 100}%`, height: "8px" }} />
+                          <div className="bg-red-500 rounded-sm" style={{ width: `${(rejected / total) * 100}%`, height: "8px" }} />
+                        </div>
+                        <div className="w-16 text-xs text-right">
+                          <span className="text-green-500">{executed}</span>
+                          {" / "}
+                          <span className="text-red-500">{rejected}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Explanation Mode Overlay */}
       {explanationMode && (
         <Card className="border-primary/50 bg-primary/5">
           <CardContent className="p-4">
             <div className="flex items-start gap-3">
               <Eye className="size-5 text-primary mt-0.5" />
-              <div className="space-y-2">
+              <div className="space-y-2 text-sm">
                 <h4 className="font-medium">Explanation Mode Active</h4>
-                <p className="text-sm text-muted-foreground">
-                  All highlighted charts show the reasoning behind AI insights. 
-                  Each visual represents computed metrics from real business data.
+                <p className="text-muted-foreground">
+                  When upload analysis data is available, the charts reflect ML outputs derived from the latest file
+                  analysis. Otherwise, they fall back to system metrics from `/api/metrics`, `/api/actions`, and
+                  `/api/predictions`.
                 </p>
-                <div className="flex gap-4 text-xs">
+                <div className="flex gap-4 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-blue-500 rounded"></div>
+                    <div className="w-3 h-3 bg-blue-500 rounded" />
                     Actions Executed
                   </span>
                   <span className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-green-500 rounded"></div>
+                    <div className="w-3 h-3 bg-green-500 rounded" />
                     Time Saved
                   </span>
                   <span className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-purple-500 rounded"></div>
+                    <div className="w-3 h-3 bg-purple-500 rounded" />
                     Revenue Impact
                   </span>
                 </div>

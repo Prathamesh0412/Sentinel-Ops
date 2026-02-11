@@ -1,295 +1,391 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { useStore } from '@/lib/store'
 
-const SUPPORTED_FILE_TYPES = {
-  'text/csv': 'csv',
-  'application/json': 'json',
-  'application/vnd.ms-excel': 'excel',
+const normalizeBaseUrl = (value) => (value ? value.replace(/\/$/, '') : '')
+const runtimeOrigin = typeof window !== 'undefined' ? `${window.location.origin}/api` : '/api'
+const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL) || normalizeBaseUrl(runtimeOrigin)
+
+const STORAGE_KEY = 'auto_ops_analysis_snapshot'
+
+const readSnapshot = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch (error) {
+    console.warn('[DataAnalysisStore] unable to read snapshot', error)
+    return null
+  }
 }
 
-const generateMockDataSources = () => [
-  {
-    id: '1',
-    name: 'Customer Database',
-    type: 'customer_database',
-    status: 'completed',
-    records_count: 15420,
-    last_processed: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-    progress: 100,
-  },
-  {
-    id: '2',
-    name: 'Sales Records',
-    type: 'sales_records',
-    status: 'processing',
-    records_count: 8934,
-    last_processed: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-    progress: 65,
-  },
-  {
-    id: '3',
-    name: 'Email Campaigns',
-    type: 'email_campaigns',
-    status: 'completed',
-    records_count: 2567,
-    last_processed: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-    progress: 100,
-  },
-]
+const writeSnapshot = (snapshot) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  } catch (error) {
+    console.warn('[DataAnalysisStore] unable to persist snapshot', error)
+  }
+}
 
-export const useDataAnalysisStore = create(
-  persist(
-    (set, get) => ({
+const clearSnapshot = () => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(STORAGE_KEY)
+  } catch (error) {
+    console.warn('[DataAnalysisStore] unable to clear snapshot', error)
+  }
+}
+
+const applySnapshotToDashboard = (snapshot) => {
+  if (!snapshot) return
+  const { metricsPatch, predictions } = snapshot
+  useStore.setState((state) => {
+    const patch = {}
+    if (metricsPatch) {
+      patch.metrics = {
+        ...state.metrics,
+        ...metricsPatch,
+        lastUpdated: metricsPatch.lastUpdated || state.metrics.lastUpdated || new Date().toISOString()
+      }
+    }
+    if (Array.isArray(predictions) && predictions.length) {
+      patch.predictions = [...predictions, ...state.predictions].slice(0, 30)
+    }
+    return Object.keys(patch).length ? patch : {}
+  })
+}
+
+const initialSnapshot = readSnapshot()
+applySnapshotToDashboard(initialSnapshot)
+
+const clamp = (value, min = 0, max = 100) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return min
+  return Math.max(min, Math.min(max, numeric))
+}
+
+const buildGeneratedPredictions = (insights) => {
+  if (!insights) return []
+  const generatedAt = insights.generated_at || new Date().toISOString()
+  const stockEntries = Array.isArray(insights.stock_status) ? insights.stock_status : []
+  const predictions = stockEntries.map((entry) => {
+    const productId = entry.product_id || 'Inventory'
+    const status = (entry.stock_status || 'HEALTHY').toUpperCase()
+    const severity = status === 'CRITICAL' ? 'High' : status === 'WATCH' ? 'Medium' : 'Low'
+    const confidence = clamp(status === 'CRITICAL' ? 92 : status === 'WATCH' ? 84 : 72)
+    const eta = Number(entry.days_until_stock_out)
+    return {
+      id: `upload-stock-${productId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      prediction_type: 'inventory_forecast',
+      type: 'inventory_forecast',
+      name: `${status === 'HEALTHY' ? 'Stock Status' : 'Stock Alert'} • ${productId}`,
+      description:
+        status === 'HEALTHY'
+          ? `On-hand ${entry.current_stock ?? 'n/a'} units with steady coverage`
+          : eta
+            ? `Projected stockout in ${eta.toFixed(1)} days at current velocity`
+            : `Elevated consumption detected for ${productId}`,
+      severity,
+      confidence,
+      createdAt: generatedAt,
+      impact:
+        status === 'CRITICAL'
+          ? 'High revenue risk'
+          : status === 'WATCH'
+            ? 'Monitor replenishment plan'
+            : 'Within guardrails',
+      recommendation:
+        status === 'CRITICAL'
+          ? 'Trigger rush reorder'
+          : status === 'WATCH'
+            ? 'Review demand spikes'
+            : 'No immediate action required',
+      source: 'upload_analysis'
+    }
+  })
+
+  const best = insights.best_selling_product
+  if (best) {
+    const bestProductId = best.product_id || 'Top Product'
+    predictions.unshift({
+      id: `upload-best-${bestProductId}-${Date.now()}`,
+      prediction_type: 'sales_velocity',
+      type: 'sales_velocity',
+      name: `High Velocity • ${bestProductId}`,
+      description: `Total sales ${Math.round(best.total_sales ?? 0)} units, avg daily ${(best.avg_daily_sales ?? 0).toFixed(1)} units`,
+      severity: 'Medium',
+      confidence: clamp(78 + Math.random() * 10, 40, 96),
+      createdAt: generatedAt,
+      impact: 'Consider scaling fulfillment capacity',
+      recommendation: 'Promote bundle or upsell while demand is hot',
+      source: 'upload_analysis'
+    })
+  }
+
+  return predictions
+}
+
+const deriveMetricsFromInsights = (payload) => {
+  const insights = payload?.insights
+  if (!insights) return { metricsPatch: null, predictions: [] }
+
+  const stats = Array.isArray(insights.sales_stats) ? insights.sales_stats : []
+  const stockEntries = Array.isArray(insights.stock_status) ? insights.stock_status : []
+  const generatedPredictions = buildGeneratedPredictions(insights)
+  const totalSales = stats.reduce((sum, stat) => sum + Number(stat.total_sales ?? 0), 0)
+  const riskyCount = stockEntries.filter((entry) => (entry.stock_status || '').toUpperCase() !== 'HEALTHY').length
+  const systemHealth = stockEntries.length
+    ? clamp(((stockEntries.length - riskyCount) / stockEntries.length) * 100, 5, 100)
+    : clamp(100 - generatedPredictions.length, 35, 100)
+  const confidenceScore = generatedPredictions.length
+    ? Math.round(
+        generatedPredictions.reduce((sum, prediction) => sum + clamp(prediction.confidence, 10, 100), 0) /
+          generatedPredictions.length
+      )
+    : systemHealth
+  const productCount = stats.length || payload?.products_analyzed || 0
+  const filesProcessed = payload?.files_processed || payload?.filesProcessed || 0
+  const metricsPatch = {
+    totalRevenue: Math.round(totalSales),
+    activeProducts: productCount,
+    totalCustomers: payload?.products_analyzed ?? productCount,
+    totalActions: filesProcessed || productCount,
+    executedActions: filesProcessed || productCount,
+    pendingActions: 0,
+    predictionsGenerated: generatedPredictions.length || productCount,
+    systemHealth,
+    confidenceScore,
+    timeSaved: clamp(totalSales / 500, 1, 240),
+    lastUpdated: new Date().toISOString()
+  }
+
+  return { metricsPatch, predictions: generatedPredictions }
+}
+
+const syncDashboardFromAnalysis = (payload, analysisSummary) => {
+  const { metricsPatch, predictions } = deriveMetricsFromInsights(payload)
+  if (!metricsPatch && !predictions.length) {
+    return
+  }
+
+  useStore.setState((state) => {
+    const patch = {}
+    if (metricsPatch) {
+      patch.metrics = {
+        ...state.metrics,
+        ...metricsPatch,
+        lastUpdated: metricsPatch.lastUpdated || new Date().toISOString()
+      }
+    }
+    if (predictions.length) {
+      patch.predictions = [...predictions, ...state.predictions].slice(0, 30)
+    }
+    return Object.keys(patch).length ? patch : {}
+  })
+
+  writeSnapshot({
+    metricsPatch,
+    predictions,
+    insights: payload?.insights || null,
+    analysisSummary: analysisSummary || null,
+    savedAt: new Date().toISOString(),
+  })
+}
+
+const initialInsights = initialSnapshot?.insights || null
+const initialAnalysisSummary = initialSnapshot?.analysisSummary || null
+
+const normalizeDescriptor = (descriptor) => ({
+  id: descriptor.id || descriptor.stored_name,
+  serverFilename: descriptor.stored_name,
+  name: descriptor.original_name,
+  type: descriptor.mime_type || 'text/csv',
+  size: descriptor.size || 0,
+  uploadTimestamp: descriptor.uploaded_at || new Date().toISOString(),
+  status: 'uploaded',
+  selected: true,
+  recordsProcessed: descriptor.records_parsed || 0,
+})
+
+export const useDataAnalysisStore = create((set, get) => ({
+  uploadedFiles: [],
+  dataSources: [],
+  latestInsights: initialInsights,
+  analysisSummary: initialAnalysisSummary,
+  isUploading: false,
+  isAnalyzing: false,
+  isLoadingSources: false,
+  error: null,
+
+  fetchBaselineInsights: async (options = {}) => {
+    const { force } = options
+    if (!force && get().latestInsights) return
+    try {
+      const response = await fetch(`${API_BASE_URL}/inventory-insights`)
+      if (!response.ok) throw new Error('Unable to load baseline insights')
+      const insights = await response.json()
+      const summary = {
+        filesProcessed: 0,
+        recordsProcessed: 0,
+        productsAnalyzed: Array.isArray(insights?.sales_stats) ? insights.sales_stats.length : 0,
+        generatedAt: insights?.generated_at || new Date().toISOString(),
+      }
+      set({ latestInsights: insights, analysisSummary: summary })
+      syncDashboardFromAnalysis({ insights, files_processed: 0, products_analyzed: summary.productsAnalyzed }, summary)
+    } catch (error) {
+      console.error('[DataAnalysisStore] fetchBaselineInsights', error)
+      set({ error: error.message })
+    }
+  },
+
+  fetchDataSources: async () => {
+    set({ isLoadingSources: true })
+    try {
+      const response = await fetch(`${API_BASE_URL}/data-sources`)
+      if (!response.ok) throw new Error('Unable to load data sources')
+      const payload = await response.json()
+      set({ dataSources: Array.isArray(payload) ? payload : [], isLoadingSources: false })
+    } catch (error) {
+      console.error('[DataAnalysisStore] fetchDataSources', error)
+      set({ isLoadingSources: false, error: error.message })
+    }
+  },
+
+  uploadFiles: async (fileList) => {
+    if (!fileList || fileList.length === 0) return
+    set({ isUploading: true, error: null })
+    const formData = new FormData()
+    Array.from(fileList).forEach((file) => formData.append('files', file))
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/upload/files`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (!response.ok) throw new Error('Upload failed')
+      const payload = await response.json()
+      const descriptors = Array.isArray(payload.files) ? payload.files : []
+      const errorCount = Number(payload.errorCount ?? 0)
+      if (!descriptors.length && errorCount > 0) {
+        set({
+          isUploading: false,
+          error: 'Upload rejected. Please use CSV, XLS, XLSX, or TXT files under 10MB.'
+        })
+        return
+      }
+      set((state) => ({
+        uploadedFiles: [...descriptors.map(normalizeDescriptor), ...state.uploadedFiles],
+        isUploading: false,
+        error: errorCount > 0 ? 'Some files were rejected. Only CSV, XLS, XLSX, or TXT are supported.' : null,
+      }))
+    } catch (error) {
+      console.error('[DataAnalysisStore] uploadFiles', error)
+      set({ isUploading: false, error: error.message })
+    }
+  },
+
+  removeFile: (id) => {
+    set((state) => ({ uploadedFiles: state.uploadedFiles.filter((file) => file.id !== id) }))
+  },
+
+  toggleFileSelection: (id) => {
+    set((state) => ({
+      uploadedFiles: state.uploadedFiles.map((file) =>
+        file.id === id ? { ...file, selected: !file.selected } : file,
+      ),
+    }))
+  },
+
+  selectAllFiles: (selected) => {
+    set((state) => ({
+      uploadedFiles: state.uploadedFiles.map((file) => ({ ...file, selected })),
+    }))
+  },
+
+  clearAnalysisHistory: () => {
+    set({
       uploadedFiles: [],
+      dataSources: [],
+      latestInsights: null,
+      analysisSummary: null,
+      error: null,
       isUploading: false,
       isAnalyzing: false,
-      dataSources: generateMockDataSources(),
+    })
+    useStore.setState((state) => ({
+      predictions: state.predictions.filter((prediction) => prediction.source !== 'upload_analysis'),
+    }))
+    clearSnapshot()
+  },
 
-      uploadFiles: (files) => {
-        const newFiles = []
-        const errors = []
+  analyzeSelectedFiles: async () => {
+    const selectedFiles = get().uploadedFiles.filter(
+      (file) => file.selected && file.status === 'uploaded',
+    )
+    if (selectedFiles.length === 0) return
 
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i]
-          const fileType = SUPPORTED_FILE_TYPES[file.type]
-          if (!fileType) {
-            errors.push(`Unsupported file type: ${file.name}`)
-            continue
-          }
-          newFiles.push({
-            id: `file_${Date.now()}_${i}`,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            uploadTimestamp: new Date().toISOString(),
-            status: 'uploaded',
-            selected: true,
-          })
-        }
+    const selectedIds = new Set(selectedFiles.map((file) => file.id))
+    set({ isAnalyzing: true, error: null })
+    set((state) => ({
+      uploadedFiles: state.uploadedFiles.map((file) =>
+        selectedIds.has(file.id)
+          ? { ...file, status: 'analyzing', analysisProgress: 15 }
+          : file,
+      ),
+    }))
 
-        if (errors.length > 0) {
-          console.error('Upload errors:', errors)
-        }
+    try {
+      const response = await fetch(`${API_BASE_URL}/upload/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: selectedFiles.map((file) => ({
+            stored_name: file.serverFilename || file.id,
+            original_name: file.name,
+          })),
+        }),
+      })
+      if (!response.ok) throw new Error('Analysis failed')
+      const payload = await response.json()
+      const summaries = new Map(
+        (payload.summaries || []).map((summary) => [summary.stored_name, summary.records_parsed]),
+      )
+      const summary = {
+        filesProcessed: payload.files_processed || selectedFiles.length,
+        recordsProcessed: payload.records_processed || 0,
+        productsAnalyzed: payload.products_analyzed || 0,
+        generatedAt: payload.insights?.generated_at || new Date().toISOString(),
+      }
 
-        set((state) => ({
-          uploadedFiles: [...newFiles, ...state.uploadedFiles],
-          isUploading: false,
-        }))
-      },
+      set((state) => ({
+        uploadedFiles: state.uploadedFiles.map((file) =>
+          selectedIds.has(file.id)
+            ? {
+                ...file,
+                status: 'completed',
+                analysisProgress: 100,
+                recordsProcessed: summaries.get(file.serverFilename || file.id) || file.recordsProcessed,
+              }
+            : file,
+        ),
+        latestInsights: payload.insights || null,
+        analysisSummary: summary,
+        isAnalyzing: false,
+      }))
 
-      removeFile: (id) => {
-        set((state) => ({
-          uploadedFiles: state.uploadedFiles.filter((file) => file.id !== id),
-        }))
-      },
-
-      toggleFileSelection: (id) => {
-        set((state) => ({
-          uploadedFiles: state.uploadedFiles.map((file) =>
-            file.id === id ? { ...file, selected: !file.selected } : file,
-          ),
-        }))
-      },
-
-      selectAllFiles: (selected) => {
-        set((state) => ({
-          uploadedFiles: state.uploadedFiles.map((file) => ({ ...file, selected })),
-        }))
-      },
-
-      analyzeSelectedFiles: async () => {
-        const { uploadedFiles } = get()
-        const selectedFiles = uploadedFiles.filter(
-          (file) => file.selected && file.status === 'uploaded',
-        )
-        if (selectedFiles.length === 0) return
-
-        set({ isAnalyzing: true })
-
-        set((state) => ({
-          uploadedFiles: state.uploadedFiles.map((file) =>
-            file.selected && file.status === 'uploaded'
-              ? {
-                  ...file,
-                  status: 'analyzing',
-                  analysisProgress: 0,
-                  recordsProcessed: 0,
-                }
-              : file,
-          ),
-        }))
-
-        for (const file of selectedFiles) {
-          try {
-            await get().simulateFileAnalysis(file.id)
-          } catch (error) {
-            get().completeFileAnalysis(
-              file.id,
-              false,
-              error instanceof Error ? error.message : 'Analysis failed',
-            )
-          }
-        }
-
-        set({ isAnalyzing: false })
-      },
-
-      simulateFileAnalysis: async (fileId) => {
-        const totalRecords = Math.floor(Math.random() * 5000) + 1000
-        let recordsProcessed = 0
-        let progress = 0
-
-        return new Promise((resolve) => {
-          const interval = setInterval(() => {
-            recordsProcessed += Math.floor(Math.random() * 100) + 50
-            progress = Math.min(100, (recordsProcessed / totalRecords) * 100)
-
-            get().updateAnalysisProgress(fileId, progress, recordsProcessed)
-
-            if (progress >= 100) {
-              clearInterval(interval)
-              get().completeFileAnalysis(fileId, true)
-              get().addDataSourceFromFile(fileId)
-              resolve(true)
-            }
-          }, 300 + Math.random() * 200)
-        })
-      },
-
-      updateAnalysisProgress: (fileId, progress, recordsProcessed) => {
-        set((state) => ({
-          uploadedFiles: state.uploadedFiles.map((file) =>
-            file.id === fileId
-              ? {
-                  ...file,
-                  analysisProgress: progress,
-                  recordsProcessed: recordsProcessed ?? file.recordsProcessed,
-                }
-              : file,
-          ),
-        }))
-      },
-
-      completeFileAnalysis: (fileId, success, error) => {
-        set((state) => ({
-          uploadedFiles: state.uploadedFiles.map((file) =>
-            file.id === fileId
-              ? {
-                  ...file,
-                  status: success ? 'completed' : 'failed',
-                  analysisProgress: success ? 100 : file.analysisProgress,
-                  error,
-                }
-              : file,
-          ),
-        }))
-      },
-
-      addDataSourceFromFile: (fileId) => {
-        const { uploadedFiles } = get()
-        const file = uploadedFiles.find((f) => f.id === fileId)
-        if (!file) return
-
-        const types = ['customer_database', 'sales_records', 'email_campaigns']
-        const randomType = types[Math.floor(Math.random() * types.length)]
-
-        const newDataSource = {
-          id: `ds_${fileId}`,
-          name: file.name.replace(/\.[^/.]+$/, ''),
-          type: randomType,
-          status: 'completed',
-          records_count: file.recordsProcessed || Math.floor(Math.random() * 5000) + 1000,
-          last_processed: new Date().toISOString(),
-          progress: 100,
-        }
-
-        set((state) => ({
-          dataSources: [newDataSource, ...state.dataSources],
-        }))
-      },
-
-      setDataSources: (sources) => set({ dataSources: sources }),
-
-      uploadData: async (type) => {
-        set({ isUploading: true })
-        await new Promise((resolve) => setTimeout(resolve, 2000))
-
-        const newSource = {
-          id: Date.now().toString(),
-          name: `${type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ')} ${new Date().toLocaleDateString()}`,
-          type,
-          status: 'processing',
-          records_count: Math.floor(Math.random() * 10000) + 1000,
-          last_processed: null,
-          progress: 0,
-        }
-
-        set((state) => ({
-          dataSources: [newSource, ...state.dataSources],
-          isUploading: false,
-        }))
-
-        const interval = setInterval(() => {
-          const { dataSources } = get()
-          const source = dataSources.find((s) => s.id === newSource.id)
-          if (source && source.status === 'processing') {
-            const newProgress = Math.min(100, source.progress + Math.random() * 15 + 5)
-            get().updateProgress(newSource.id, newProgress)
-            if (newProgress >= 100) {
-              clearInterval(interval)
-              get().completeProcessing(newSource.id)
-            }
-          } else {
-            clearInterval(interval)
-          }
-        }, 1000)
-      },
-
-      updateProgress: (id, progress) => {
-        set((state) => ({
-          dataSources: state.dataSources.map((source) =>
-            source.id === id
-              ? { ...source, progress, status: progress >= 100 ? 'completed' : 'processing' }
-              : source,
-          ),
-        }))
-      },
-
-      completeProcessing: (id) => {
-        set((state) => ({
-          dataSources: state.dataSources.map((source) =>
-            source.id === id
-              ? {
-                  ...source,
-                  status: 'completed',
-                  progress: 100,
-                  last_processed: new Date().toISOString(),
-                }
-              : source,
-          ),
-        }))
-      },
-
-      simulateRealTimeUpdates: () => {
-        const interval = setInterval(() => {
-          const { dataSources } = get()
-          const processingSources = dataSources.filter((s) => s.status === 'processing')
-          if (processingSources.length > 0) {
-            const randomSource =
-              processingSources[Math.floor(Math.random() * processingSources.length)]
-            const newProgress = Math.min(
-              100,
-              randomSource.progress + Math.random() * 10 + 2,
-            )
-            get().updateProgress(randomSource.id, newProgress)
-          }
-        }, 3000)
-        return () => clearInterval(interval)
-      },
-    }),
-    {
-      name: 'data-analysis-storage',
-      partialize: (state) => ({ uploadedFiles: state.uploadedFiles }),
-    },
-  ),
-)
+      syncDashboardFromAnalysis(payload, summary)
+      get().fetchDataSources()
+    } catch (error) {
+      console.error('[DataAnalysisStore] analyzeSelectedFiles', error)
+      set((state) => ({
+        uploadedFiles: state.uploadedFiles.map((file) =>
+          selectedIds.has(file.id)
+            ? { ...file, status: 'failed', error: error.message }
+            : file,
+        ),
+        isAnalyzing: false,
+        error: error.message,
+      }))
+    }
+  },
+}))

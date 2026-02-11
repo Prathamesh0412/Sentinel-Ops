@@ -13,6 +13,9 @@ public record InventoryInsightsResponse(
         @JsonProperty("best_selling_product") BestSellingProduct bestSellingProduct,
         @JsonProperty("sales_trends") List<SalesTrend> salesTrends,
         @JsonProperty("demand_clusters") List<DemandCluster> demandClusters,
+        @JsonProperty("price_recommendations") List<PriceRecommendation> priceRecommendations,
+        @JsonProperty("assortment_recommendations") List<AssortmentRecommendation> assortmentRecommendations,
+        @JsonProperty("discount_recommendations") List<DiscountRecommendation> discountRecommendations,
         @JsonProperty("generated_at") OffsetDateTime generatedAt
 ) {
     public record SalesStat(
@@ -47,6 +50,31 @@ public record InventoryInsightsResponse(
             @JsonProperty("product_id") String productId,
             @JsonProperty("total_sales") Double totalSales,
             @JsonProperty("cluster") Integer cluster
+    ) {
+    }
+
+    public record PriceRecommendation(
+            @JsonProperty("product_id") String productId,
+            @JsonProperty("recommended_price") Double recommendedPrice,
+            @JsonProperty("current_price") Double currentPrice,
+            @JsonProperty("expected_impact") String expectedImpact,
+            @JsonProperty("rationale") String rationale
+    ) {
+    }
+
+    public record AssortmentRecommendation(
+            @JsonProperty("product_id") String productId,
+            @JsonProperty("action") String action,
+            @JsonProperty("reason") String reason,
+            @JsonProperty("confidence") Double confidence
+    ) {
+    }
+
+    public record DiscountRecommendation(
+            @JsonProperty("product_id") String productId,
+            @JsonProperty("suggested_discount") Double suggestedDiscount,
+            @JsonProperty("trigger_window") String triggerWindow,
+            @JsonProperty("notes") String notes
     ) {
     }
 }

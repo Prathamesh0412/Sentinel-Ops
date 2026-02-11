@@ -23,7 +23,7 @@ import {
   Package
 } from "lucide-react"
 import { useState, useEffect } from "react"
-import { useActions, usePredictions, useWorkflows, useMetrics } from "@/lib/store"
+import { useActions, usePredictions, useWorkflows, useMetrics, useAppStore } from "@/lib/store"
 import { NoSSR } from "@/components/no-ssr"
 import { LoadingState } from "@/components/ui/loading-state"
 
@@ -47,10 +47,15 @@ export function Navigation() {
   const predictions = usePredictions()
   const workflows = useWorkflows()
   const metrics = useMetrics()
+  const { fetchPredictions } = useAppStore()
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    Promise.resolve(fetchPredictions()).catch(() => {})
+  }, [fetchPredictions])
 
   // Calculate notifications based on real data
   const pendingActions = actions.filter(a => a.status === 'pending').length

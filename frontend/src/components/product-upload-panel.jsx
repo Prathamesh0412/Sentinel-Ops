@@ -18,50 +18,47 @@ import {
   Database,
   TrendingUp
 } from "lucide-react"
-import { useProductUploadStore } from "@/lib/product-upload-store"
+import { useDataAnalysisStore } from "@/lib/data-analysis-store"
 import { useToast } from "@/hooks/use-toast"
 
 const fileIconMap = {
   'text/csv': File,
   'application/vnd.ms-excel': File,
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': File,
-  'application/json': FileText
+  'text/plain': FileText
 }
 
 // Extension-based icon mapping for when MIME type is not detected correctly
 const getFileIcon = (fileName, mimeType) => {
   const extension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'))
   
-  if (extension === '.csv' || extension === '.xls' || extension === '.xlsx') {
+  if (extension === '.csv' || extension === '.xls' || extension === '.xlsx' || extension === '.txt') {
     return File
-  }
-  if (extension === '.json') {
-    return FileText
   }
   
   return fileIconMap[mimeType] || File
 }
 
 const statusConfig = {
-  uploading: {
-    label: 'Uploading',
+  uploaded: {
+    label: 'Ready',
     className: 'status-processing',
-    icon: RefreshCw
+    icon: Clock
   },
-  processing: {
-    label: 'Processing',
+  analyzing: {
+    label: 'Analyzing',
     className: 'status-processing',
     icon: RefreshCw
   },
   completed: {
-    label: 'Completed',
+    label: 'Synced',
     className: 'status-success',
     icon: CheckCircle2
   },
-  error: {
-    label: 'Error',
+  failed: {
+    label: 'Failed',
     className: 'status-error',
-    icon: XCircle
+    icon: AlertCircle
   }
 }
 
@@ -69,13 +66,15 @@ export function ProductUploadPanel() {
   const { 
     uploadedFiles, 
     isUploading, 
-    isProcessing,
+    isAnalyzing,
     uploadFiles,
     removeFile,
     toggleFileSelection,
     selectAllFiles,
-    processSelectedFiles
-  } = useProductUploadStore()
+    analyzeSelectedFiles,
+    analysisSummary,
+    error
+  } = useDataAnalysisStore()
   
   const { toast } = useToast()
   const [mounted, setMounted] = useState(false)
@@ -112,23 +111,23 @@ export function ProductUploadPanel() {
 
   const handleProcessFiles = async () => {
     try {
-      await processSelectedFiles()
+      await analyzeSelectedFiles()
       toast({
-        title: "Processing Complete",
-        description: "Files have been processed and product data updated successfully.",
+        title: "Analysis Complete",
+        description: "ML insights refreshed from the uploaded data.",
       })
     } catch (error) {
       toast({
-        title: "Processing Failed",
+        title: "Analysis Failed",
         description: "There was an error processing your files. Please try again.",
         variant: "destructive"
       })
     }
   }
 
-  const selectedFilesCount = uploadedFiles.filter(file => file.selected).length
+  const readyForAnalysisCount = uploadedFiles.filter(file => file.selected && file.status === 'uploaded').length
   const completedFilesCount = uploadedFiles.filter(file => file.status === 'completed').length
-  const hasProcessableFiles = selectedFilesCount > 0 && uploadedFiles.some(file => file.selected && file.status === 'completed')
+  const hasProcessableFiles = readyForAnalysisCount > 0
 
   if (!mounted) {
     return (
@@ -183,7 +182,7 @@ export function ProductUploadPanel() {
             <div>
               <p className="text-lg font-medium">Drop files here or click to browse</p>
               <p className="text-sm text-muted-foreground mt-1">
-                Supports CSV, Excel, and JSON files up to 10MB
+                Supports CSV, Excel, and TXT files up to 10MB
               </p>
             </div>
             <Button
@@ -198,12 +197,18 @@ export function ProductUploadPanel() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".csv,.xlsx,.xls,.json"
+              accept=".csv,.xlsx,.xls,.txt"
               className="hidden"
               onChange={(e) => e.target.files && handleFileSelect(e.target.files)}
             />
           </div>
         </div>
+
+        {error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600">
+            {error}
+          </div>
+        )}
 
         {/* File List */}
         {uploadedFiles.length > 0 && (
@@ -212,7 +217,7 @@ export function ProductUploadPanel() {
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">Uploaded Files</span>
                 <Badge variant="secondary">
-                  {completedFilesCount} of {uploadedFiles.length} ready
+                  {completedFilesCount} synced · {readyForAnalysisCount} ready
                 </Badge>
               </div>
               <div className="flex gap-2">
@@ -220,7 +225,7 @@ export function ProductUploadPanel() {
                   variant="outline"
                   size="sm"
                   onClick={() => selectAllFiles(true)}
-                  disabled={isProcessing}
+                  disabled={isAnalyzing}
                 >
                   Select All
                 </Button>
@@ -228,7 +233,7 @@ export function ProductUploadPanel() {
                   variant="outline"
                   size="sm"
                   onClick={() => selectAllFiles(false)}
-                  disabled={isProcessing}
+                  disabled={isAnalyzing}
                 >
                   Deselect All
                 </Button>
@@ -237,7 +242,8 @@ export function ProductUploadPanel() {
 
             <div className="space-y-3">
               {uploadedFiles.map((file) => {
-                const StatusIcon = statusConfig[file.status].icon
+                const statusMeta = statusConfig[file.status] || statusConfig.uploaded
+                const StatusIcon = statusMeta.icon
                 const FileIcon = getFileIcon(file.name, file.type)
                 
                 return (
@@ -251,7 +257,7 @@ export function ProductUploadPanel() {
                       type="checkbox"
                       checked={file.selected}
                       onChange={() => toggleFileSelection(file.id)}
-                      disabled={isProcessing || file.status !== 'completed'}
+                      disabled={isAnalyzing || file.status === 'analyzing'}
                       className="rounded"
                     />
                     
@@ -264,10 +270,10 @@ export function ProductUploadPanel() {
                         <p className="text-sm font-medium truncate">{file.name}</p>
                         <Badge 
                           variant="outline" 
-                          className={`text-xs ${statusConfig[file.status].className}`}
+                          className={`text-xs ${statusMeta.className}`}
                         >
                           <StatusIcon className="mr-1 size-3" />
-                          {statusConfig[file.status].label}
+                          {statusMeta.label}
                         </Badge>
                       </div>
                       
@@ -275,14 +281,14 @@ export function ProductUploadPanel() {
                         <span className="text-xs text-muted-foreground">
                           {(file.size / 1024).toFixed(1)} KB
                         </span>
-                        {file.processingProgress !== undefined && file.status === 'processing' && (
+                        {typeof file.analysisProgress === 'number' && file.status === 'analyzing' && (
                           <div className="flex items-center gap-2 flex-1">
                             <Progress 
-                              value={file.processingProgress} 
+                              value={file.analysisProgress} 
                               className="flex-1 h-1" 
                             />
                             <span className="text-xs text-muted-foreground">
-                              {file.processingProgress}%
+                              {file.analysisProgress}%
                             </span>
                           </div>
                         )}
@@ -302,7 +308,7 @@ export function ProductUploadPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => removeFile(file.id)}
-                      disabled={isProcessing}
+                      disabled={isAnalyzing}
                     >
                       <Trash className="size-4" />
                     </Button>
@@ -318,12 +324,12 @@ export function ProductUploadPanel() {
           <div className="flex justify-center">
             <Button
               onClick={handleProcessFiles}
-              disabled={isProcessing || selectedFilesCount === 0}
+              disabled={isAnalyzing || readyForAnalysisCount === 0}
               className="gap-2"
               size="lg"
             >
-              <TrendingUp className={`mr-2 size-4 ${isProcessing ? 'animate-spin' : ''}`} />
-              {isProcessing ? "Processing..." : `Process ${selectedFilesCount} File${selectedFilesCount > 1 ? 's' : ''}`}
+              <TrendingUp className={`mr-2 size-4 ${isAnalyzing ? 'animate-spin' : ''}`} />
+              {isAnalyzing ? "Analyzing..." : `Analyze ${readyForAnalysisCount} File${readyForAnalysisCount > 1 ? 's' : ''}`}
             </Button>
           </div>
         )}
@@ -331,8 +337,8 @@ export function ProductUploadPanel() {
         {/* Instructions */}
         <div className="text-xs text-muted-foreground space-y-1">
           <p>• Upload sales reports, inventory files, or product cost sheets</p>
-          <p>• System will automatically map fields and update product metrics</p>
-          <p>• Dashboard will refresh in real-time with new insights</p>
+          <p>• Launch ML analysis to update sale velocity, stock runway, and demand clusters</p>
+          <p>• Dashboard refreshes instantly after each run ({analysisSummary?.generatedAt ? `last run ${new Date(analysisSummary.generatedAt).toLocaleString()}` : 'awaiting first analysis'})</p>
         </div>
       </CardContent>
     </Card>

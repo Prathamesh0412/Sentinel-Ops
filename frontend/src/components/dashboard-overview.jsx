@@ -17,11 +17,13 @@ export function DashboardOverview() {
 
   useEffect(() => {
     setMounted(true)
-    
-    const interval = setInterval(() => {
-      updateMetrics()
-      setLastUpdated(new Date())
-    }, 5000)
+
+    const refreshMetrics = () => {
+      Promise.resolve(updateMetrics()).finally(() => setLastUpdated(new Date()))
+    }
+
+    refreshMetrics()
+    const interval = setInterval(refreshMetrics, 5000)
 
     return () => clearInterval(interval)
   }, [updateMetrics])

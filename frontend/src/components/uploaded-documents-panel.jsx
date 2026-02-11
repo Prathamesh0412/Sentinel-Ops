@@ -23,7 +23,6 @@ const fileIconMap = {
   'text/csv': File,
   'application/vnd.ms-excel': File,
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': File,
-  'application/pdf': FileText,
   'text/plain': File
 }
 
@@ -59,7 +58,8 @@ export function UploadedDocumentsPanel() {
     removeFile, 
     toggleFileSelection, 
     selectAllFiles,
-    analyzeSelectedFiles
+    analyzeSelectedFiles,
+    error
   } = useDataAnalysisStore()
   
   const fileInputRef = useRef(null)
@@ -148,10 +148,16 @@ export function UploadedDocumentsPanel() {
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".csv,.xls,.xlsx,.pdf,.txt"
+          accept=".csv,.xls,.xlsx,.txt"
           onChange={handleFileSelect}
           className="hidden"
         />
+
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600">
+            {error}
+          </div>
+        )}
         
         {!mounted ? (
           <div className="space-y-4">
@@ -172,7 +178,9 @@ export function UploadedDocumentsPanel() {
           <div className="py-8 text-center text-sm text-muted-foreground">
             <FileText className="size-12 mx-auto mb-4 opacity-50" />
             <p>No files uploaded yet. Click "Upload Data" to get started.</p>
-            <p className="mt-2 text-xs">Supported formats: CSV, XLS, XLSX, PDF, TXT</p>
+            <p className="mt-2 text-xs text-muted-foreground/80">
+              Supports CSV, XLS, and XLSX exports. Everything flows straight into the ML analysis pipeline once you click Analyze.
+            </p>
           </div>
         ) : (
           <div className="space-y-4">

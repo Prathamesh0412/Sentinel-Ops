@@ -32,6 +32,9 @@ class ModelInput:
 	products: pd.DataFrame
 	inventory: pd.DataFrame
 	sales: pd.DataFrame
+	seasonal: pd.DataFrame
+	feedback: pd.DataFrame
+	trend_overrides: pd.DataFrame
 
 
 def _default_products() -> pd.DataFrame:
@@ -94,7 +97,14 @@ def _ensure_frame(records: Iterable[Dict[str, Any]], required: Iterable[str]) ->
 
 def _load_input(path: Optional[Path]) -> ModelInput:
 	if not path:
-		return ModelInput(_default_products(), _default_inventory(), _default_sales())
+		return ModelInput(
+			_default_products(),
+			_default_inventory(),
+			_default_sales(),
+			pd.DataFrame(),
+			pd.DataFrame(),
+			pd.DataFrame(),
+		)
 
 	data = json.loads(path.read_text(encoding="utf-8"))
 	products = _ensure_frame(data.get("products", []), ["product_id", "product_name", "price"])
@@ -102,7 +112,10 @@ def _load_input(path: Optional[Path]) -> ModelInput:
 	sales = _ensure_frame(data.get("sales", []), ["product_id", "sale_date", "quantity_sold"])
 	if not sales.empty:
 		sales["sale_date"] = pd.to_datetime(sales["sale_date"])
-	return ModelInput(products, inventory, sales)
+	seasonal = pd.DataFrame(data.get("seasonal_context", []))
+	feedback = pd.DataFrame(data.get("feedback_signals", []))
+	trend_overrides = pd.DataFrame(data.get("trend_signals", []))
+	return ModelInput(products, inventory, sales, seasonal, feedback, trend_overrides)
 
 
 def _sales_stats(sales: pd.DataFrame) -> pd.DataFrame:
@@ -191,11 +204,215 @@ def _demand_clusters(stats: pd.DataFrame) -> List[Dict[str, Any]]:
 	]
 
 
+
+def _build_trend_map(trends: List[Dict[str, Any]], overrides: pd.DataFrame) -> Dict[str, str]:
+	trend_map = {item["product_id"]: item["trend"] for item in trends}
+	if overrides.empty:
+		return trend_map
+	for value in overrides.to_dict(orient="records"):
+		pid = value.get("product_id")
+		label = value.get("trend_label")
+		if not pid or not label:
+			continue
+		trend_map[pid] = str(label).upper()
+	return trend_map
+
+
+def _feedback_summary(feedback: pd.DataFrame) -> Dict[str, Dict[str, int]]:
+	if feedback.empty:
+		return {}
+	required = {"positive", "negative", "neutral"}
+	for column in required:
+		if column not in feedback.columns:
+			feedback[column] = 0
+	subset = feedback[["positive", "negative", "neutral"]].apply(pd.to_numeric, errors="coerce").fillna(0)
+	feedback[["positive", "negative", "neutral"]] = subset.astype(int)
+	grouped = feedback.groupby("product_id")[ ["positive", "negative", "neutral"] ].sum()
+	return grouped.to_dict(orient="index")
+
+
+def _seasonal_snapshot(seasonal: pd.DataFrame) -> Dict[str, Any]:
+	if seasonal.empty:
+		return {"current_modifier": 1.0, "current_weather": None, "current_festival": None}
+	frame = seasonal.copy()
+	if "month" not in frame.columns:
+		frame["month"] = np.nan
+	frame["month"] = pd.to_numeric(frame["month"], errors="coerce")
+	current_month = datetime.now().month
+	current = frame[frame["month"] == current_month]
+	if current.empty:
+		current = frame
+	modifier_series = current.get("demand_modifier", pd.Series([1.0]))
+	modifier_series = pd.to_numeric(modifier_series, errors="coerce")
+	current_modifier = modifier_series.mean(skipna=True)
+	current_weather = current.get("weather", pd.Series([None])).dropna().tail(1).to_list()
+	current_festival = current.get("festival", pd.Series([None])).dropna().tail(1).to_list()
+	return {
+		"current_modifier": float(current_modifier) if not math.isnan(current_modifier) else 1.0,
+		"current_weather": current_weather[0] if current_weather else None,
+		"current_festival": current_festival[0] if current_festival else None,
+	}
+
+
+def _sentiment_score(summary: Dict[str, int]) -> float:
+	pos = summary.get("positive", 0)
+	neg = summary.get("negative", 0)
+	neu = summary.get("neutral", 0)
+	total = pos + neg + neu
+	if total == 0:
+		return 0.0
+	return (pos - neg) / total
+
+
+def _price_recommendations(
+	products: pd.DataFrame,
+	stats: pd.DataFrame,
+	feedback_scores: Dict[str, Dict[str, int]],
+	trend_map: Dict[str, str],
+	seasonal_snapshot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+	if products.empty:
+		return []
+	stats_map = {row["product_id"]: row for row in stats.to_dict(orient="records")}
+	modifier = seasonal_snapshot.get("current_modifier", 1.0) or 1.0
+	recs: List[Dict[str, Any]] = []
+	for product in products.to_dict(orient="records"):
+		pid = product.get("product_id")
+		price = float(product.get("price") or 0)
+		if price <= 0:
+			continue
+		sentiment = _sentiment_score(feedback_scores.get(pid, {}))
+		trend = trend_map.get(pid, "STABLE")
+		adjustment = 0.0
+		rationale: List[str] = []
+		if modifier > 1.05:
+			adjustment += min(0.05 * (modifier - 1), 0.08)
+			rationale.append("Seasonal uplift")
+		elif modifier < 0.95:
+			adjustment -= min(0.04 * (1 - modifier), 0.08)
+			rationale.append("Seasonal softness")
+		if sentiment > 0.25:
+			adjustment += 0.03
+			rationale.append("Positive feedback")
+		elif sentiment < -0.25:
+			adjustment -= 0.05
+			rationale.append("Negative feedback")
+		trend_upper = str(trend).upper()
+		if trend_upper in {"INCREASING", "POSITIVE"}:
+			adjustment += 0.04
+			rationale.append("Demand trending up")
+		elif trend_upper in {"DECREASING", "NEGATIVE"}:
+			adjustment -= 0.06
+			rationale.append("Demand trending down")
+		adjustment = max(-0.15, min(0.15, adjustment))
+		recommended = round(price * (1 + adjustment), 2)
+		impact = stats_map.get(pid, {}).get("total_sales")
+		recs.append(
+			{
+				"product_id": pid,
+				"current_price": price,
+				"recommended_price": recommended,
+				"expected_impact": f"Targeting +/-{abs(int(adjustment * 100))}% revenue shift" if adjustment else "Maintain price",
+				"rationale": ", ".join(sorted(set(rationale))) or "Stable demand",
+			}
+		)
+	return recs
+
+
+def _assortment_recommendations(
+	stock: pd.DataFrame,
+	trend_map: Dict[str, str],
+) -> List[Dict[str, Any]]:
+	if stock.empty:
+		return []
+	recs: List[Dict[str, Any]] = []
+	for row in stock.to_dict(orient="records"):
+		pid = row.get("product_id")
+		status = str(row.get("stock_status") or "").upper()
+		days = row.get("days_until_stock_out")
+		trend = trend_map.get(pid, "STABLE")
+		if status == "CRITICAL":
+			recs.append(
+			{
+				"product_id": pid,
+				"action": "REORDER",
+				"reason": f"Projected stockout in {days:.1f} days" if days else "Stockout risk",
+				"confidence": 0.92,
+			}
+		)
+		elif status == "WATCH":
+			recs.append(
+			{
+				"product_id": pid,
+				"action": "PLAN_REPLENISHMENT",
+				"reason": "Runway tightening amid demand",
+				"confidence": 0.84,
+			}
+		)
+		elif trend in {"INCREASING", "POSITIVE"}:
+			recs.append(
+			{
+				"product_id": pid,
+				"action": "PROMOTE",
+				"reason": "Momentum detected — push bundles",
+				"confidence": 0.78,
+			}
+		)
+	return recs
+
+
+def _discount_recommendations(
+	products: pd.DataFrame,
+	trend_map: Dict[str, str],
+	feedback_scores: Dict[str, Dict[str, int]],
+	seasonal_snapshot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+	recs: List[Dict[str, Any]] = []
+	if products.empty:
+		return recs
+	trigger = seasonal_snapshot.get("current_festival") or seasonal_snapshot.get("current_weather") or "upcoming cycle"
+	for product in products.to_dict(orient="records"):
+		pid = product.get("product_id")
+		sentiment = _sentiment_score(feedback_scores.get(pid, {}))
+		trend = trend_map.get(pid, "STABLE")
+		if sentiment < -0.15 or trend in {"NEGATIVE", "DECREASING"}:
+			discount = 10.0
+			if sentiment < -0.4:
+				discount = 15.0
+			recs.append(
+			{
+				"product_id": pid,
+				"suggested_discount": discount,
+				"trigger_window": str(trigger).title() if trigger else "promo window",
+				"notes": "Counter negative sentiment" if sentiment < -0.15 else "Stimulate demand",
+			}
+		)
+	return recs
+
+
 def run_model(inputs: ModelInput) -> Dict[str, Any]:
 	stats = _sales_stats(inputs.sales)
 	stock = _stock_health(inputs.inventory, stats)
 	trends = _trend_analysis(inputs.sales)
 	clusters = _demand_clusters(stats)
+	trend_map = _build_trend_map(trends, inputs.trend_overrides)
+	feedback_scores = _feedback_summary(inputs.feedback)
+	seasonal_snapshot = _seasonal_snapshot(inputs.seasonal)
+	price_recs = _price_recommendations(inputs.products, stats, feedback_scores, trend_map, seasonal_snapshot)
+	assortment_recs = _assortment_recommendations(stock, trend_map)
+	discount_recs = _discount_recommendations(inputs.products, trend_map, feedback_scores, seasonal_snapshot)
+	combined_trends: List[Dict[str, Any]] = []
+	seen: set[str] = set()
+	for item in trends:
+		pid = item.get("product_id")
+		label = trend_map.get(pid, item.get("trend")) if pid else item.get("trend")
+		combined_trends.append({"product_id": pid, "trend": label})
+		if pid:
+			seen.add(pid)
+	for pid, label in trend_map.items():
+		if pid in seen:
+			continue
+		combined_trends.append({"product_id": pid, "trend": label})
 
 	best = None
 	if not stats.empty:
@@ -210,8 +427,11 @@ def run_model(inputs: ModelInput) -> Dict[str, Any]:
 		"sales_stats": stats.to_dict(orient="records"),
 		"stock_status": stock.to_dict(orient="records"),
 		"best_selling_product": best,
-		"sales_trends": trends,
+		"sales_trends": combined_trends,
 		"demand_clusters": clusters,
+		"price_recommendations": price_recs,
+		"assortment_recommendations": assortment_recs,
+		"discount_recommendations": discount_recs,
 		"generated_at": datetime.now(timezone.utc).isoformat(),
 	}
 
